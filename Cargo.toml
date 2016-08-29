@@ -7,7 +7,7 @@ authors = ["Adrian Seyboldt <adrian.seyboldt@gmail.com>"]
 debug = false
 panic = "abort"
 opt-level = 3
-lto = false
+lto = true
 debug-assertions = false
 codegen-units = 1
 

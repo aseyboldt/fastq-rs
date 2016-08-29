@@ -2,6 +2,7 @@ use fastq::Parser;
 use std::io::Read;
 use fastq::RecordSet;
 use fastq::decode::ThreadedReader;
+use fastq::Record;
 use std::sync::mpsc::{sync_channel, Receiver};
 use std::thread::{Builder, JoinHandle};
 use parasailors as align;
@@ -13,8 +14,8 @@ extern crate lz4;
 extern crate bio;
 extern crate parasailors;
 
-// const BUFFSIZE: usize = 4194304;
-const BUFFSIZE: usize = 8 * 1024;
+const BUFFSIZE: usize = 4 * 1024 * 1024;
+//const BUFFSIZE: usize = 64 * 1024;
 
 
 fn counter_thread(rx: Receiver<Option<RecordSet>>, thread_idx: usize) -> JoinHandle<usize> {
@@ -28,7 +29,8 @@ fn counter_thread(rx: Receiver<Option<RecordSet>>, thread_idx: usize) -> JoinHan
             let mut total: usize = 0;
             while let Some(record_set) = rx.recv().unwrap() {
                 for record in record_set.records() {
-                    let score = align::local_alignment_score(&profile, record.seq(), 11, 1);
+                    //let score = align::local_alignment_score(&profile, record.seq(), 11, 1);
+                    let score = 10;
                     if score >= 8 {
                         total += 1;
                     }
@@ -43,7 +45,7 @@ fn counter_thread(rx: Receiver<Option<RecordSet>>, thread_idx: usize) -> JoinHan
 fn count_seq<R: Read + Send + 'static>(reader: R) -> usize {
     let parser = Parser::from_reader(reader);
 
-    let n_threads = 2;
+    let n_threads = 1;
     let (txs, rxs): (Vec<_>, Vec<_>) = (0..n_threads)
         .map(|_| sync_channel::<Option<RecordSet>>(2))
         .unzip();

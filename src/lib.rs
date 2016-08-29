@@ -11,45 +11,45 @@ extern crate memchr;
 
 pub mod decode;
 
-const BUFSIZE: usize = 128 * 1024;
+const BUFSIZE: usize = 64 * 1024;
 
-pub struct Record<T> {
-    record: T,
+
+pub trait Record {
+    fn seq(&self) -> &[u8];
+    fn head(&self) -> &[u8];
+    fn qual(&self) -> &[u8];
+    fn write<W: Write>(&self, writer: &mut W) -> Result<()>;
+}
+
+
+pub struct RecordBase<T> {
+    data: T,
     seq: (usize, usize),
     qual: (usize, usize),
     head: (usize, usize),
 }
 
 
-pub type RefRecord<'a> = Record<&'a [u8]>;
-pub type OwnedRecord = Record<Vec<u8>>;
-type IdxRecord = Record<(usize, usize)>;
+pub type RefRecord<'a> = RecordBase<&'a [u8]>;
+pub type OwnedRecord = RecordBase<Vec<u8>>;
+type IdxRecord = RecordBase<(usize, usize)>;
 
 
-impl<T: Borrow<[u8]>> Record<T> {
-    pub fn seq(&self) -> &[u8] {
-        &self.record.borrow()[self.seq.0 .. self.seq.1]
+impl<T> Record for RecordBase<T> where T: Borrow<[u8]> {
+    fn seq(&self) -> &[u8] {
+        &self.data.borrow()[self.seq.0 .. self.seq.1]
     }
 
-    pub fn head(&self) -> &[u8] {
-        &self.record.borrow()[self.head.0 .. self.head.1]
+    fn head(&self) -> &[u8] {
+        &self.data.borrow()[self.head.0 .. self.head.1]
     }
 
-    pub fn qual_str(&self) -> &[u8] {
-        &self.record.borrow()[self.qual.0 .. self.qual.1]
+    fn qual(&self) -> &[u8] {
+        &self.data.borrow()[self.qual.0 .. self.qual.1]
     }
 
-    pub fn qual(&self) -> Vec<u16> {
-        self.qual_str().iter().map(|x| *x as u16).collect()
-    }
-
-    pub fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
-        try!(writer.write(self.record.borrow()));
-        Ok(())
-    }
-
-    pub fn fastq(&self) -> &[u8] {
-        self.record.borrow()
+    fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
+        writer.write_all(self.data.borrow())
     }
 }
 
@@ -61,54 +61,65 @@ enum IdxRecordResult {
 }
 
 
-fn parse_header(buffer: &[u8]) -> Result<Option<(usize, usize, usize)>> {
-    if buffer.len() < 2 {
-        return Ok(None)
-    }
-
-    if buffer[0] != b'@' {
-        return Err(Error::new(ErrorKind::InvalidData, "Fastq headers must start with '@'"));
-    }
-
+fn end_of_line(buffer: &[u8]) -> Option<(usize, usize)> {
     match memchr(b'\n', buffer) {
-        None => { Ok(None) },
-        Some(pos) => { Ok(Some((1, pos, pos + 1))) }
+        None => { None },
+        Some(pos) => {
+            if (pos > 0) && (buffer[pos - 1] == b'\r') {
+                Some((pos - 1, pos + 1))
+            } else {
+                Some((pos, pos + 1))
+            }
+        }
     }
+}
+
+
+fn parse_header(buffer: &[u8]) -> Result<Option<(usize, usize, usize)>> {
+    match buffer.first() {
+        None => { return Ok(None) },
+        Some(&b'@') => { },
+        Some(_) => {
+            return Err(Error::new(ErrorKind::InvalidData,
+                                  "Fastq headers must start with '@'"))
+        }
+    }
+    Ok(end_of_line(buffer).map(|(stop, end)| (1, stop, end)))
 }
 
 
 fn parse_seq(buffer: &[u8]) -> Result<Option<(usize, usize, usize)>> {
-    let linestop = match memchr(b'\n', buffer) {
+    let (stop_seq, start_sep) = match end_of_line(buffer) {
         None => { return Ok(None) },
-        Some(i) => { i }
+        Some(val) => val
     };
 
-    if buffer.len() < linestop + 3 {
-        return Ok(None)
+    match buffer[start_sep..].first() {
+        None => { return Ok(None) },
+        Some(&b'+') => { },
+        Some(_) => {
+            return Err(Error::new(ErrorKind::InvalidData,
+                                  "Sequence and quality not separated by +"));
+        }
     }
-    if &buffer[linestop .. linestop + 3] != b"\n+\n" {
-        Err(Error::new(ErrorKind::InvalidData,
-                       "Fastq sequence and quality must be separated by a '+'"))
-    } else {
-        Ok(Some((0, linestop, linestop + 3)))
-    }
+
+    let (_, end) = match end_of_line(&buffer[start_sep..]) {
+        None => { return Ok(None) },
+        Some((a, b)) => (a + start_sep, b + start_sep),
+    };
+    Ok(Some((0, stop_seq, end)))
 }
 
 
 fn parse_qual(buffer: &[u8]) -> Result<Option<(usize, usize, usize)>> {
-    let linestop = match memchr(b'\n', buffer) {
-        None => { return Ok(None) },
-        Some(i) => { i }
-    };
-
-    Ok(Some((0, linestop, linestop + 1)))
+    Ok(end_of_line(buffer).map(|(stop, end)| (0, stop, end)))
 }
 
 
 impl<'a> RefRecord<'a> {
     pub fn to_owned_record(&self) -> OwnedRecord {
         OwnedRecord {
-            record: self.record.to_owned(),
+            data: self.data.to_owned(),
             seq: self.seq,
             qual: self.qual,
             head: self.head,
@@ -118,9 +129,9 @@ impl<'a> RefRecord<'a> {
 
 impl IdxRecord {
     fn to_ref_record<'a>(&self, buffer: &'a [u8]) -> RefRecord<'a> {
-        let data = &buffer[self.record.0..self.record.1];
+        let data = &buffer[self.data.0..self.data.1];
         let datalen = data.len();
-        assert!(datalen == self.record.1 - self.record.0);
+        assert!(datalen == self.data.1 - self.data.0);
 
         /*
         assert!(self.head.0 < datalen);
@@ -137,7 +148,7 @@ impl IdxRecord {
         */
 
         RefRecord {
-            record: data,
+            data: data,
             head: self.head,
             seq: self.seq,
             qual: self.qual,
@@ -172,7 +183,7 @@ impl IdxRecord {
 
         Ok(IdxRecordResult::Record(
             IdxRecord {
-                record: (0, stop),
+                data: (0, stop),
                 head: (head0, head1),
                 seq: (seq0, seq1),
                 qual: (qual0, qual1),
@@ -185,7 +196,7 @@ impl IdxRecord {
 impl OwnedRecord {
     pub fn to_ref_record(&self) -> RefRecord {
         RefRecord {
-            record: &self.record,
+            data: &self.data,
             seq: self.seq,
             qual: self.qual,
             head: self.head,
@@ -278,7 +289,7 @@ impl<R: Read> Parser<R> {
                         continue 'outer;
                     },
                     IdxRecordResult::Record(record) => {
-                        record_length = record.record.1 - record.record.0;
+                        record_length = record.data.1 - record.data.0;
                         func(record.to_ref_record(buffer));
                     }
                 }
@@ -360,9 +371,9 @@ impl<R: Read> Iterator for RecordSetIter<R> {
                 },
                 Ok(IdxRecordResult::Record(mut record)) => {
                     self.incomplete_record = false;
-                    record_length = record.record.1 - record.record.0;
-                    record.record.0 += totalbytes;
-                    record.record.1 += totalbytes;
+                    record_length = record.data.1 - record.data.0;
+                    record.data.0 += totalbytes;
+                    record.data.1 += totalbytes;
                     totalbytes += record_length;
                     records.push(record);
                 }
@@ -390,7 +401,7 @@ impl<R: Read> Parser<R> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
-    use super::Parser;
+    use super::{Parser, Record};
 
     #[test]
     fn correct() {
@@ -399,7 +410,7 @@ mod tests {
         let ok = parser.each(|record| {
             assert_eq!(record.head(), b"hi");
             assert_eq!(record.seq(), b"NN");
-            assert_eq!(record.qual_str(), b"++");
+            assert_eq!(record.qual(), b"++");
         });
         ok.unwrap();
     }
@@ -431,7 +442,7 @@ mod tests {
                 count += 1;
                 assert_eq!(record.head(), b"hi");
                 assert_eq!(record.seq(), b"NN");
-                assert_eq!(record.qual_str(), b"++");
+                assert_eq!(record.qual(), b"++");
             }
         }
         assert_eq!(count, 2)
