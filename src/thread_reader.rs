@@ -49,7 +49,7 @@ struct BufferReceiver {
 
 
 impl BufferReceiver {
-    fn take(&mut self) -> Result<PartialReader> {
+    fn next_reader(&mut self) -> Result<PartialReader> {
         let data = self.full_recv.recv().map_err(|e| Error::new(ErrorKind::BrokenPipe, e))?;
         Ok(PartialReader {
             available: data.written?,
@@ -68,9 +68,12 @@ struct PartialReader {
     written: usize,
 }
 
+
 impl Drop for PartialReader {
     fn drop(&mut self) {
         if let Some(data) = self.data.take() {
+            // An error indicates that the other end has hung up.
+            // In this case we don't need to do anything.
             let _ = self.sender.send(data);
         }
     }
@@ -104,7 +107,10 @@ pub struct ThreadReader {
 impl Read for ThreadReader {
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         if self.reader.is_none() || self.reader.as_ref().unwrap().finished() {
-            self.reader = Some(self.receiver.take()?)
+            // We drop the old partial reader manually before waiting for a new one
+            // to prevent a deadlock if the queuelen is 1.
+            ::std::mem::drop(self.reader.take());
+            self.reader = Some(self.receiver.next_reader()?)
         }
 
         let reader = self.reader.as_mut().unwrap();
