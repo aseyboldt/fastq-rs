@@ -1,7 +1,6 @@
 use fastq::Parser;
 use std::io::{stderr, stdin, Read, Write, Result};
-use fastq::{Record};
-use fastq::thread_reader::ThreadReader;
+use fastq::{Record, thread_reader};
 use std::fs::File;
 use std::env::args;
 
@@ -11,7 +10,7 @@ extern crate fastq;
 extern crate lz4;
 extern crate parasailors;
 
-const BUFFSIZE: usize = 1 << 22;
+const BUFSIZE: usize = 1 << 22;
 const N_THREADS: usize = 2;
 
 
@@ -21,24 +20,26 @@ fn main() {
         Some(path) => { Box::new(File::open(path).unwrap()) }
     };
     let file = lz4::Decoder::new(file).unwrap();
-    let file = ThreadReader::new(file, BUFFSIZE, 3);
 
-    let parser = Parser::new(file);
-    let results: Result<Vec<u64>> = parser.apply_threaded(N_THREADS, |record_sets| {
-        let matrix = align::Matrix::new(align::MatrixType::Identity);
-        let profile = align::Profile::new(b"ATTAATCCAT", &matrix);
+    let results = thread_reader(BUFSIZE, 2, file, |reader| {
+        let parser = Parser::new(reader);
+        let results: Result<Vec<u64>> = parser.parallel_each(N_THREADS, |record_sets| {
+            let matrix = align::Matrix::new(align::MatrixType::Identity);
+            let profile = align::Profile::new(b"ATTAATCCAT", &matrix);
 
-        let mut thread_total: u64 = 0;
-        for record_set in record_sets {
-            for record in record_set.iter() {
-                let score = align::local_alignment_score(&profile, record.seq(), 11, 1);
-                if score > 7 {
-                    thread_total += 1;
+            let mut thread_total: u64 = 0;
+            for record_set in record_sets {
+                for record in record_set.iter() {
+                    let score = align::local_alignment_score(&profile, record.seq(), 11, 1);
+                    if score > 7 {
+                        thread_total += 1;
+                    }
                 }
             }
-        }
-        thread_total
-    });
+            thread_total
+        });
+        results
+    }).expect("Reader thread paniced");
 
     match results {
         Err(e) => { write!(stderr(), "Error in fastq file: {}", e).unwrap() },
