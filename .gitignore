@@ -3,3 +3,4 @@ Cargo.lock
 callgrind.out.*
 *.bk
 perf.data*
+data
