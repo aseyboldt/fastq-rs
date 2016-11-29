@@ -2,6 +2,9 @@
 name = "fastq"
 version = "0.2.0"
 authors = ["Adrian Seyboldt <adrian.seyboldt@gmail.com>"]
+description = "A parser for fastq"
+license = "MIT"
+repository = "https://github.com/aseyboldt/fastq-rs"
 
 [profile.release]
 debug = true
@@ -12,5 +15,5 @@ debug-assertions = false
 memchr = ">=0.1"
 
 [dev-dependencies]
-parasailors = "*"
-lz4 = "*"
+parasailors = "^0.3"
+lz4 = "^1.20"
