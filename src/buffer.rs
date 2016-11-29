@@ -90,10 +90,12 @@ impl Buffer {
         Ok(n_read)
     }
 
+    #[inline]
     pub fn data(&self) -> &[u8] {
         &self.data[self.start..self.end]
     }
 
+    #[inline]
     pub fn consume(&mut self, count: usize) {
         self.start = self.start.checked_add(count).unwrap();
         debug_assert!(self.start <= self.end);

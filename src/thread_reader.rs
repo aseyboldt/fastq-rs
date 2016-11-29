@@ -1,3 +1,5 @@
+//! Wrap a reader in a background thread.
+
 use std::io::{Result, Read, Error, ErrorKind, Cursor};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread;
@@ -98,7 +100,7 @@ impl PartialReader {
 
 
 pub struct ThreadReader {
-    pub handle: thread::JoinHandle<()>,
+    handle: Option<thread::JoinHandle<()>>,
     receiver: BufferReceiver,
     reader: Option<PartialReader>
 }
@@ -120,7 +122,7 @@ impl Read for ThreadReader {
 
 
 impl ThreadReader {
-    pub fn new<R>(mut reader: R, buffsize: usize, queuelen: usize) -> ThreadReader
+    fn new<R>(mut reader: R, buffsize: usize, queuelen: usize) -> ThreadReader
         where R: Read + Send + 'static
     {
         let (mut bufsend, bufrecv) = buffer_channel(buffsize, queuelen);
@@ -134,9 +136,58 @@ impl ThreadReader {
         }).unwrap();
 
         ThreadReader {
-            handle: handle,
+            handle: Some(handle),
             receiver: bufrecv,
             reader: None,
         }
+    }
+}
+
+
+/// Wrap a reader in a background thread.
+///
+/// This is only useful for readers that do expensive operations (eg decompression).
+///
+/// The thread precomputes `queuelen` many reads with the given buffer size, and
+/// then waits for the consumer to catch up.
+///
+/// If the reader panics, reads to the consumer in the main thread returns
+/// `ErrorKind::BrokenPipe` errors and the return value of `thread_reader` contains
+/// the panic from the reader thread.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// extern crate lz4;
+/// extern crate fastq;
+///
+/// use std::io::stdin;
+/// use fastq::thread_reader;
+///
+/// # fn main() {
+/// // lz4 is faster with a buffer size equal to the block size (default 4MB)
+/// const BUFSIZE: usize = 1 << 22;
+/// // The number of buffers the background thread fills, before it waits for
+/// // a consumer to catch up.
+/// const QUEUELEN: usize = 2;
+///
+/// let file = lz4::Decoder::new(stdin()).unwrap();
+/// let out = thread_reader(BUFSIZE, QUEUELEN, file, |reader| {
+///     // do something with the reader
+/// });
+/// # }
+/// ```
+pub fn thread_reader<R, F, O>(bufsize: usize, queuelen: usize, reader: R, func: F)
+    -> thread::Result<O>
+    where F: FnOnce(&mut ThreadReader) -> O,
+          R: Read + Send + 'static
+{
+    let mut inner = ThreadReader::new(reader, bufsize, queuelen);
+    let out = func(&mut inner);
+    let handle = inner.handle.take().unwrap();
+    ::std::mem::drop(inner);
+    match handle.join() {
+        Ok(_) => Ok(out),
+        Err(e) => Err(e),
     }
 }
