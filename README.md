@@ -5,7 +5,7 @@ coreutils `wc -l` (about 2GB/s on my laptop). It also makes it
 easy to distribute the processing of fastq records to many
 cores.
 
-See the documentation for details.
+See the [documentation](https://docs.rs/fastq/0.2.0/fastq/) for details.
 
 # Examples
 
