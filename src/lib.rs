@@ -10,7 +10,7 @@
 //! - `Parser::record_sets`. This function returns an iterator over record sets.
 //!   All records in a record set share the same data array, so we only need
 //!   one allocation per record set.
-//! - `Parser::parallel_each`. This is a conveniance function that wraps
+//! - `Parser::parallel_each`. This is a convenience function that wraps
 //!   `Parser::record_sets` but passes the record sets to a number of
 //!   background threads. For each of the record sets a closure is executed.
 //!   Results from the threads are collected and returned to the caller.
@@ -70,7 +70,7 @@
 //!
 //! If we want to do more than just count the number of records (in this
 //! example count how many sequences align to ATTAATCCAT with a score
-//! better than 7), we probably wantto use more cores:
+//! better than 7), we probably want to use more cores:
 //!
 //! ```rust,no_run
 //! # extern crate lz4;
