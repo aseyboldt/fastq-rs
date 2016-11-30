@@ -469,8 +469,8 @@ impl RecordSet {
 
     /// Return an iterator over all fastq records in this record set.
     #[inline]
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item=RefRecord<'a>> + 'a {
-        self.records.iter().map(move |r| r.to_ref_record(&self.buffer))
+    pub fn iter<'a>(&'a self) -> RecordSetItems<'a> {
+        RecordSetItems { idx_records: self.records.iter(), buffer: &self.buffer }
     }
 
     pub fn len(&self) -> usize {
@@ -493,7 +493,12 @@ impl<'a> Iterator for RecordSetItems<'a> {
     type Item = RefRecord<'a>;
 
     fn next(&mut self) -> Option<RefRecord<'a>> {
-        None
+        match self.idx_records.next() {
+            Some(idx_record) => {
+                Some(idx_record.to_ref_record(self.buffer))
+            },
+            None => None
+        }
     }
 }
 
