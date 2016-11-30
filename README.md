@@ -38,7 +38,7 @@ fags `-O3 -march=native`. All programs can be found in the
 | ----------| -----------| --------- | ------------ | ------- | ------------- |
 | `wc -l`   | **2.3GB/s**|  1.2GB/s  |  NA          | 300MB/s |  NA           |
 | `fastq`   |   1.9GB/s  |**1.9GB/s**| **1.6GB/s**  | 300MB/s |  300MB/s      |
-| `rust-bio`|   730MB/s  |     NA    |  150MB/s     |   NA    |    NA         |
+| `rust-bio`|   730MB/s  |     NA    |  250MB/s     |   NA    |    NA         |
 | `seqan`   |   150MB/s  |     NA    |    NA        |   NA    |    NA         |
 | `kseq.h`  |   980MB/s  |  680MB/s  |    NA        |   NA    |    NA         |
 
@@ -55,6 +55,8 @@ Some notes from checking `perf record`:
   sends each record to the other thread individually. Each send (I use a
   `sync_channel` from the rust stdlib) requires the use of synchronisation
   primitives, and three allocations for header, sequence and quality.
+  Collecting records in a `Vec` and sending only after a large number of
+  them is available speeds this up from 150MB/s to 250MB/s.
 - `seqan` is busy allocating stuff, and uses (I think) a naive
   implementation of `memchr()` to find line breaks.
 - gzip decompression runs at about 320MB/s, so there is not much we can do

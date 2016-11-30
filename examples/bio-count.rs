@@ -6,26 +6,31 @@ use bio::io::fastq::{Reader, Record};
 extern crate bio;
 
 fn main() {
-    let mut reader = Reader::new(stdin());
-    let mut record = Record::new();
-    let (tx, rx) = sync_channel(100);
+    let reader = Reader::new(stdin());
+    let (tx, rx) = sync_channel::<Vec<Record>>(10);
 
     let handle = Builder::new().name("worker".to_string()).spawn(move || {
         let mut count: usize = 0;
-        while let Ok(_) = rx.recv() {
-            count += 1;
+        while let Ok(val) = rx.recv() {
+            count += val.len();
         }
         count
     }).unwrap();
 
-    while let Ok(_) = reader.read(&mut record) {
-        if record.is_empty() { break };
-        tx.send(record.clone()).unwrap();
-    }
-    //for record in reader.records() {
-    //    tx.send(record).unwrap();
-    //    count += 1;
+    //let mut record = Record::new();
+    //while let Ok(_) = reader.read(&mut record) {
+    //    if record.is_empty() { break };
+    //    tx.send(record.clone()).unwrap();
     //}
+    let mut record_buffer = vec![];
+    for record in reader.records() {
+        record_buffer.push(record.unwrap());
+        if record_buffer.len() == 1000 {
+            tx.send(record_buffer).unwrap();
+            record_buffer = Vec::with_capacity(1000);
+        }
+    }
+    tx.send(record_buffer).unwrap();
     ::std::mem::drop(tx);
     println!("{}", handle.join().unwrap());
 }
