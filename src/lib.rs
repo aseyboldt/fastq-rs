@@ -1,4 +1,3 @@
-#![feature(conservative_impl_trait)]
 //! A fast parser for fastq.
 //!
 //! The records in a file can be accessed through three different interfaces:
