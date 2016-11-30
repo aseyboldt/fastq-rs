@@ -17,7 +17,7 @@ int main(int argc, char const ** argv)
 
     while (!atEnd(reader))
     {
-        readRecords(ids, seqs, reader, 50);
+        readRecords(ids, seqs, reader, 5000);
     }
 
     return 0;

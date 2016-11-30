@@ -12,11 +12,26 @@
 //!   one allocation per record set.
 //! - `Parser::parallel_each`. This is a convenience function that wraps
 //!   `Parser::record_sets` but passes the record sets to a number of
-//!   background threads. For each of the record sets a closure is executed.
-//!   Results from the threads are collected and returned to the caller.
+//!   background threads. A closure is executed on each thread with an iterator
+//!   over record sets. Results from the threads are collected and returned
+//!   to the caller.
 //!
 //! Since fastq file are usually compressed, this crate also includes a function
 //! `thread_reader` to offload the decompression to a different core.
+//!
+//! # The FastQ standard
+//!
+//! This library supports Windows and Unix line endings, it does not support
+//! the old MAC line ending `\r`. It allows arbitrary data on the separator
+//! line between sequence and quality as long as it starts with a `+` (some
+//! fastq files repeat the id on this line). It does not validate that the
+//! sequence or the quality contain only allowed characters. Sequence and
+//! quality must have the same length. They are not allowed to contain
+//! newline characters.
+//!
+//! At the moment it does not make any effort to pair reads. This means that
+//! pairs that belong together might end up on different cores in a
+//! multithreaded setup. (TODO This should change it the future!).
 //!
 //! # Examples
 //!
@@ -66,7 +81,7 @@
 //! # }
 //! ```
 //!
-//! This gets us up to ~1.5GB/s on a fresh page cache.
+//! This gets us up to ~1.6GB/s on a fresh page cache.
 //!
 //! If we want to do more than just count the number of records (in this
 //! example count how many sequences align to ATTAATCCAT with a score
@@ -95,7 +110,7 @@
 //!         let mut thread_total: u64 = 0;
 //!         for record_set in record_sets {
 //!             for record in record_set.iter() {
-//!                 let score = align::local_alignment_score(&profile, record.seq(), 11, 1);
+//!                 let score = align::local_alignment_score(&profile, record.seq(), 2, 1);
 //!                 if score > 7 {
 //!                     thread_total += 1;
 //!                 }
@@ -126,7 +141,6 @@ mod buffer;
 
 pub use thread_reader::thread_reader;
 
-//const BUFSIZE: usize = 17 * 1024;
 const BUFSIZE: usize = 68 * 1024;
 
 
@@ -142,11 +156,17 @@ pub trait Record {
     fn write<W: Write>(&self, writer: &mut W) -> Result<usize>;
 
     /// Return true if the sequence contains only A, C, T and G.
+    ///
+    /// FIXME This might be much faster with a [bool; 256] array
+    /// or using some simd instructions (eg with the jetscii crate).
     fn validate_dna(&self) -> bool {
         self.seq().iter().all(|&x| x == b'A' || x == b'C' || x == b'T' || x == b'G')
     }
 
     /// Return true if the sequence contains only A, C, T, G and N.
+    ///
+    /// FIXME This might be much faster with a [bool; 256] array
+    /// or using some simd instructions (eg with the jetscii crate).
     fn validate_dnan(&self) -> bool {
         self.seq().iter().all(|&x| x == b'A' || x == b'C' || x == b'T' || x == b'G' || x == b'N')
     }
@@ -463,6 +483,21 @@ impl RecordSet {
 }
 
 
+pub struct RecordSetItems<'a> {
+    idx_records: ::std::slice::Iter<'a, IdxRecord>,
+    buffer: &'a [u8],
+}
+
+
+impl<'a> Iterator for RecordSetItems<'a> {
+    type Item = RefRecord<'a>;
+
+    fn next(&mut self) -> Option<RefRecord<'a>> {
+        None
+    }
+}
+
+
 pub struct RecordSetIter<R: Read> {
     parser: Parser<R>,
     num_records_guess: usize,
@@ -535,13 +570,84 @@ impl<R: Read> Parser<R> {
         RecordSetIter {
             parser: self,
             reader_at_end: false,
-            num_records_guess: 20,
+            num_records_guess: 100,
         }
     }
 
-    pub fn parallel_each<O, I, F>(self, n_threads: usize, func: F) -> Result<I>
+    /// Apply a function to each record, but distribute the work on a number of threads.
+    ///
+    /// # Parameters
+    ///
+    /// - `n_threads`: The number of worker threads to start.
+    /// - `func`: A closure that is executed on each new thread and takes an
+    ///    Iterator of RecordSets as argument.
+    ///
+    /// This function parses the fastq file and passes record sets to the worker threads.
+    ///
+    /// It terminates if one of the following happes:
+    ///
+    /// - The parser exhauts the fastq file. This function waits for all worker
+    ///   threads to terminate (their iterator will not yield new values after
+    ///   they finish buffered ones). It collects their return values and returns them.
+    /// - The parser finds a syntax error. The iterators in the worker threads stop
+    ///   yielding new record sets. (The worker threads are not notified of the error).
+    ///   The function waits for them to terminate, discards their return values and
+    ///   returns an IO error with error kind `std::error::ErrorKind::InvalidData`.
+    /// - The underlying Reader yields an io error other an `Interrupted`. The behaviour
+    ///   is the same as the previous, but it returns the error value of the inner reader.
+    /// - A worker thread terminates before its iterator is exhausted. The parser stops,
+    ///   waits for all workers to exit and returns the collected return values. If the
+    ///   caller wants to know whether we parsed the whole file, this information must
+    ///   be encoded in the return values of the worker threads.
+    /// - A worker panics. The parser stops and this function panics.
+    ///
+    /// # Panics
+    ///
+    /// Panics, if one of the worker threads panics.
+    ///
+    /// # Examples
+    ///
+    /// Parse a fastq file and print a sequence starting with ATTAATTA if the file
+    /// contains one (it might not be the first one):
+    ///
+    /// ```rust
+    /// use std::io::{Result, ErrorKind, Cursor};
+    /// use fastq::{Parser, Record};
+    ///
+    /// let reader = Cursor::new(b"@hi\nATTAATTAATTA\n+\n++++++++++++\n");
+    /// let parser = Parser::new(reader);
+    /// let result: Result<Vec<_>> = parser.parallel_each(4, |record_sets| {
+    ///     for record_set in record_sets {
+    ///         for record in record_set.iter() {
+    ///             if record.seq().starts_with(b"ATTAATTA") {
+    ///                 // Early return stops the parser
+    ///                 return Some(record.seq().to_vec());
+    ///             }
+    ///         }
+    ///     };
+    ///     None
+    /// });
+    /// match result {
+    ///     Ok(res) => {
+    ///         match res.iter().filter(|x| x.is_some()).next() {
+    ///             None => { assert!(false) } // nothing found
+    ///             Some(seq) => {
+    ///                 // Yay! we found it.
+    ///                 assert_eq!(seq.as_ref().unwrap(), b"ATTAATTAATTA")
+    ///             }
+    ///         }
+    ///     },
+    ///     Err(e) => {
+    ///         if e.kind() == ErrorKind::InvalidData {
+    ///             assert!(false);  // this is not a valid fastq file.
+    ///         } else {
+    ///             assert!(false);  // some other io error.
+    ///         }
+    ///     }
+    /// }
+    pub fn parallel_each<O, S, F>(self, n_threads: usize, func: F) -> Result<S>
         where
-            I: FromIterator<O>,
+            S: FromIterator<O>,
             O: Send + 'static,
             F: Send + Sync + 'static,
             F: Fn(Box<Iterator<Item=RecordSet>>) -> O,
@@ -552,7 +658,7 @@ impl<R: Read> Parser<R> {
         let func = Arc::new(func);
 
         for i in 0..n_threads {
-            let (tx, rx): (SyncSender<RecordSet>, _) = sync_channel(2);
+            let (tx, rx): (SyncSender<RecordSet>, _) = sync_channel(10);
             let func = func.clone();
 
             let thread = thread::Builder::new()
@@ -567,12 +673,12 @@ impl<R: Read> Parser<R> {
         }
 
         let mut io_error = None;
-        let mut send_error = None;
         for (record_set, sender) in self.record_sets().zip(senders.iter().cycle()) {
             match record_set {
                 Ok(records) => {
-                    if let Err(e) = sender.send(records) {
-                        send_error = Some(e);
+                    // We ignore send errors. If the caller wants to know if we exhausted
+                    // the file they have to return that information in the worker thread.
+                    if let Err(_) = sender.send(records) {
                         break;
                     }
                 },
@@ -582,12 +688,9 @@ impl<R: Read> Parser<R> {
                 }
             }
         }
-
-        if send_error.is_some() {
-            panic!("Worker thread died.");
-        }
-
+        // Make iterators in the workers should stop yielding values
         ::std::mem::drop(senders);
+
         let results = threads.into_iter()
             .map(|thread| thread.join())
             .collect::<Vec<_>>()
@@ -643,6 +746,17 @@ mod tests {
             i += 1;
         });
         ok.unwrap();
+    }
+
+    #[test]
+    fn empty_id() {
+        let data = Cursor::new(b"@\nNN\n+\n++\n");
+        let mut parser = Parser::new(data);
+        parser.each(|record| {
+            assert_eq!(record.head(), b"");
+            assert_eq!(record.seq(), b"NN");
+            assert_eq!(record.qual(), b"++");
+        }).unwrap();
     }
 
     #[test]

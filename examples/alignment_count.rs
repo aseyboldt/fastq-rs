@@ -1,5 +1,5 @@
 use fastq::Parser;
-use std::io::{stderr, stdin, Read, Write, Result};
+use std::io::{stderr, stdin, Read, Write, ErrorKind, Result};
 use fastq::{Record, thread_reader};
 use std::fs::File;
 use std::env::args;
@@ -21,16 +21,16 @@ fn main() {
     };
     let file = lz4::Decoder::new(file).unwrap();
 
-    let results = thread_reader(BUFSIZE, 2, file, |reader| {
+    let results: Result<Vec<_>> = thread_reader(BUFSIZE, 2, file, |reader| {
         let parser = Parser::new(reader);
-        let results: Result<Vec<u64>> = parser.parallel_each(N_THREADS, |record_sets| {
+        let results = parser.parallel_each(N_THREADS, |record_sets| {
             let matrix = align::Matrix::new(align::MatrixType::Identity);
             let profile = align::Profile::new(b"ATTAATCCAT", &matrix);
 
             let mut thread_total: u64 = 0;
             for record_set in record_sets {
                 for record in record_set.iter() {
-                    let score = align::local_alignment_score(&profile, record.seq(), 11, 1);
+                    let score = align::local_alignment_score(&profile, record.seq(), 2, 1);
                     if score > 7 {
                         thread_total += 1;
                     }
@@ -42,7 +42,13 @@ fn main() {
     }).expect("Reader thread paniced");
 
     match results {
-        Err(e) => { write!(stderr(), "Error in fastq file: {}", e).unwrap() },
         Ok(vals) => { println!("total = {}", vals.iter().sum::<u64>()) },
+        Err(e) => {
+            if e.kind() == ErrorKind::InvalidData {
+                write!(stderr(), "Error in fastq file: {}", e).unwrap()
+            } else {
+                write!(stderr(), "IOError: {}", e).unwrap()
+            }
+        },
     }
 }
