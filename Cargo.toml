@@ -1,19 +1,19 @@
 [package]
 name = "fastq"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Adrian Seyboldt <adrian.seyboldt@gmail.com>"]
 description = "A parser for fastq"
 license = "MIT"
 repository = "https://github.com/aseyboldt/fastq-rs"
 documentation = "https://docs.rs/fastq"
-
-[profile.release]
-opt-level = 3
+readme = "README.md"
+keywords = ["bio", "fastq", "parser"]
 
 [dependencies]
 memchr = ">=0.1"
+lz4 = "^1.20"
+flate2 = { version = "^0.2", features = ["zlib"], default-features = false }
 
 [dev-dependencies]
 parasailors = "^0.3"
-lz4 = "^1.20"
 bio = "^0.10"
