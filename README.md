@@ -13,7 +13,7 @@ See the [documentation](https://docs.rs/fastq/) for details and examples.
 # Benchmarks
 
 We compare this library with the fastq parser in `rust-bio`,
-the C++ library `seqan` 2.0.0, with `kseq.h` and with `wc -l`.
+the C++ library `seqan` 2.2.0, with `kseq.h` and with `wc -l`.
 
 We test 4 scenarios:
 - A 2GB test file is uncompressed on a ramdisk. The program
@@ -48,10 +48,10 @@ Some notes from checking `perf record`:
 
 - `wc -l` and `fastq` spend most of the time in `memchr()`, but in contrast
   to `wc`, `fastq` has to check that headers begin with `@` and separator
-  lines with `+`. This seems to explain most of the difference in scenario 1.
+  lines with `+` and do some more bookeeping.
   `lz4 -d` uses a large buffer size (default 4MB), which seems to prevent
-  the operating system from running `lz4` and `wc`  concurrently.
-  `fastq` avoids this problem with an internal queue.
+  the operating system from running `lz4` and `wc` concurrently when connected
+  by a pipe. `fastq` avoids this problem with an internal queue.
 - `rust-bio` looses some time copying data and validating utf8.
   The large slowdown in the threaded version stems from the fact, that it
   sends each record to the other thread individually. Each send (I use a
