@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/aseyboldt/fastq-rs.svg?branch=master)](https://travis-ci.org/aseyboldt/fastq-rs)
+
 # A fast parser for fastq.
 
 This library can process fastq files at about the speed of the
