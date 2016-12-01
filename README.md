@@ -8,7 +8,7 @@ about 150MB/s). It also makes it easy to distribute the
 processing of fastq records to many cores, without losing much
 of the performance.
 
-See the [documentation](https://docs.rs/fastq/) for details.
+See the [documentation](https://docs.rs/fastq/) for details and examples.
 
 # Benchmarks
 
@@ -61,56 +61,3 @@ Some notes from checking `perf record`:
   them is available speeds this up from 150MB/s to 250MB/s.
 - `seqan` is busy allocating stuff, and uses (I think) a naive
   implementation of `memchr()` to find line breaks.
-
-# Examples
-
-Count the number of fastq records that contain an `N`
-
-```rust
-use fastq::{Parser, Record};
-let reader = ::std::io::stdin();
-let mut parser = Parser::new(reader);
-let mut total: usize = 0;
-
-parser.each(|record| {
-   if record.seq().contains(&b'N') {
-       total += 1;
-       true  // continue parsing
-   }
-}).unwrap();
-println!("{}", total);
-```
-
-And an (unnecessarily) parallel version of this
-
-```rust
-const n_threads: usize = 2;
-
-use fastq::{Parser, Record};
-let reader = ::std::io::stdin();
-let parser = Parser::new(reader);
-
-let results: Vec<u64> = parser.parallel_each(n_threads, |record_sets| {
-    // we can initialize thread local variables here.
-    let mut thread_total = 0;
-
-    // We iterate over sets of records
-    for record_set in record_sets {
-        for record in record_set.iter() {
-            if record.seq().contains(&b'N') {
-                thread_total += 1;
-            }
-        }
-    }
-
-    // The values we return (it can be any type implementing `Send`)
-    // are collected from the different threads by
-    // `parser.parallel_each` and returned. See doc for a description of
-    // the error handling.
-    thread_total
-}).expect("Invalid fastq file");
-
-// Add up the results from the individual worker threads
-let total: u64 = results.iter().sum();
-println!("{}", total);
-```
