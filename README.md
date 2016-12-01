@@ -39,7 +39,7 @@ fags `-O3 -march=native`. All programs can be found in the
 |           |   ramdisk  |   lz4     | lz4 + thread | gzip    | gzip + thread |
 | ----------| -----------| --------- | ------------ | ------- | ------------- |
 | `wc -l`   | **2.3GB/s**|  1.2GB/s  |  NA          | 300MB/s |  NA           |
-| `fastq`   |   1.9GB/s  |**1.9GB/s**| **1.6GB/s**  | 300MB/s |  300MB/s      |
+| `fastq`   |   1.9GB/s  |**1.9GB/s**| **1.6GB/s**  |**650MB/s**|**620MB/s** |
 | `rust-bio`|   730MB/s  |     NA    |  250MB/s     |   NA    |    NA         |
 | `seqan`   |   150MB/s  |     NA    |    NA        |   NA    |    NA         |
 | `kseq.h`  |   980MB/s  |  680MB/s  |    NA        |   NA    |    NA         |
@@ -61,8 +61,6 @@ Some notes from checking `perf record`:
   them is available speeds this up from 150MB/s to 250MB/s.
 - `seqan` is busy allocating stuff, and uses (I think) a naive
   implementation of `memchr()` to find line breaks.
-- gzip decompression runs at about 320MB/s, so there is not much we can do
-  on that front.
 
 # Examples
 
@@ -76,7 +74,8 @@ let mut total: usize = 0;
 
 parser.each(|record| {
    if record.seq().contains(&b'N') {
-       total += 1
+       total += 1;
+       true  // continue parsing
    }
 }).unwrap();
 println!("{}", total);

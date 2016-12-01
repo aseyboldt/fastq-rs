@@ -16,7 +16,8 @@
 //!   to the caller.
 //!
 //! Since fastq file are usually compressed, this crate also includes a function
-//! `thread_reader` to offload the decompression to a different core.
+//! `thread_reader` to offload the decompression to a different core, and
+//! `from_path` to guess the compression.
 //!
 //! # The FastQ standard
 //!
@@ -45,95 +46,78 @@
 //! let mut parser = Parser::new(stdin());
 //! let mut total: usize = 0;
 //! parser.each(|_| {
-//!     total += 1
+//!     total += 1;
+//!     // return `true` if you want to continue iterating
+//!     true
 //! }).expect("Invalid fastq file");
 //! println!("{}", total);
 //! ```
 //!
-//! If the file is already in the system cache, this runs on my laptop about
-//! 10% slower than `wc -l` (at about 2GB/s), and at disk speed (~500MB/s) otherwise.
-//!
-//! If we add lz4 decompression in a background thread:
-//!
-//! ```rust,no_run
-//! extern crate lz4;
-//! extern crate fastq;
-//!
-//! use std::io::stdin;
-//! use fastq::{Parser, thread_reader};
-//!
-//! # fn main() {
-//! // lz4 decompression is faster with a large 4MB buffer
-//! let BUFSIZE: usize = 1<<22;
-//! let QUEUELEN: usize = 2;
-//!
-//! let reader = lz4::Decoder::new(stdin()).expect("Input is not lz4 compressed");
-//! let total = thread_reader(BUFSIZE, QUEUELEN, reader, |reader| {
-//!     let mut total: u64 = 0;
-//!     let mut parser = Parser::new(reader);
-//!     parser.each(|_| {
-//!         total += 1;
-//!      }).expect("Invalid fastq file");
-//!     total
-//! }).expect("Reader thread paniced");
-//! println!("{}", total);
-//! # }
-//! ```
-//!
-//! This gets us up to ~1.6GB/s on a fresh page cache.
-//!
 //! If we want to do more than just count the number of records (in this
-//! example count how many sequences align to ATTAATCCAT with a score
-//! better than 7), we probably want to use more cores:
+//! example, count how many sequences align to an illumina adapter with a score
+//! better than 10), we probably want to use more cores:
 //!
 //! ```rust,no_run
-//! # extern crate lz4;
-//! # extern crate fastq;
-//! extern crate parasailors;
-//!
-//! # use std::io::stdin;
-//! use fastq::{Parser, thread_reader, Record};
+//! use fastq::{parse_path, Record};
+//! use std::env::args;
 //! use parasailors as align;
 //!
-//! # fn main() {
-//! # let BUFSIZE: usize = 1<<22;
-//! # let QUEUELEN: usize = 2;
-//! # let reader = lz4::Decoder::new(stdin()).expect("Input is not lz4 compressed");
-//! const N_THREADS: usize = 2;
+//! extern crate fastq;
+//! extern crate parasailors;
 //!
-//! let results = thread_reader(BUFSIZE, 3, reader, |reader| {
-//!     let parser = Parser::new(reader);
-//!     let results: Vec<u64> = parser.parallel_each(N_THREADS, |record_sets| {
-//!         let matrix = align::Matrix::new(align::MatrixType::Identity);
-//!         let profile = align::Profile::new(b"ATTAATCCAT", &matrix);
-//!         let mut thread_total: u64 = 0;
-//!         for record_set in record_sets {
-//!             for record in record_set.iter() {
-//!                 let score = align::local_alignment_score(&profile, record.seq(), 2, 1);
-//!                 if score > 7 {
-//!                     thread_total += 1;
+//! fn main() {
+//!     let filename = args().nth(1);
+//!     // Treat "-" as stdin
+//!     let path = match filename.as_ref().map(String::as_ref) {
+//!         None | Some("-") => { None },
+//!         Some(name) => Some(name)
+//!     };
+//!
+//!     parse_path(path, |parser| {
+//!         let nthreads = 4;
+//!         let results: Vec<usize> = parser.parallel_each(nthreads, |record_sets| {
+//!             // we can initialize thread local variables here.
+//!             let adapter = b"AATGATACGGCGACCACCGAGATCTACACTCTTTCCCTACACGACGCTCTTCCGATCT";
+//!             let matrix = align::Matrix::new(align::MatrixType::Identity);
+//!             let profile = align::Profile::new(adapter, &matrix);
+//!             let mut thread_total = 0;
+//!
+//!             for record_set in record_sets {
+//!                 for record in record_set.iter() {
+//!                     let score = align::local_alignment_score(&profile, record.seq(), 5, 1);
+//!                     if score > 8 {
+//!                         thread_total += 1;
+//!                     }
 //!                 }
 //!             }
-//!         }
-//!         thread_total
-//!     }).expect("Invalid fastq file");
-//!     results
-//! }).expect("Reader thread paniced");
-//! println!("{}", results.iter().sum::<u64>());
-//! # }
+//!
+//!             // The values we return (it can be any type implementing `Send`)
+//!             // are collected from the different threads by
+//!             // `parser.parallel_each` and returned. See doc for a description of
+//!             // error handling.
+//!             thread_total
+//!         }).expect("Invalid fastq file");
+//!         println!("{}", results.iter().sum::<usize>());
+//!     }).expect("Invalid compression");
+//! }
 //! ```
 //!
-//! On my feeeble 2 core laptop this ends up being bound by the alignment at ~300MB/s,
+//! On my feeble 2 core laptop this ends up being bound by the alignment at ~300MB/s,
 //! but it should scale well to a larger number of cores.
 
-use std::io::{Write, Result, Read, Error, ErrorKind};
+use std::io::{Write, Result, Read, Error, ErrorKind, Cursor};
 use std::thread;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::Arc;
 use std::iter::FromIterator;
+use std::path::Path;
 use memchr::memchr;
+use lz4::Decoder;
+use flate2::read::GzDecoder;
 
 extern crate memchr;
+extern crate lz4;
+extern crate flate2;
 
 mod thread_reader;
 mod buffer;
@@ -188,7 +172,7 @@ pub struct RefRecord<'a> {
 pub struct OwnedRecord {
     pub head: Vec<u8>,
     pub seq: Vec<u8>,
-    pub sep: Vec<u8>,
+    pub sep: Option<Vec<u8>>,
     pub qual: Vec<u8>,
 }
 
@@ -258,7 +242,10 @@ impl Record for OwnedRecord {
         written += writer.write(b"\n")?;
         written += writer.write(self.seq())?;
         written += writer.write(b"\n")?;
-        written += writer.write(&self.sep)?;
+        match self.sep {
+            Some(ref s) => { written += writer.write(s)? }
+            None => { written += writer.write(b"+")? }
+        }
         written += writer.write(b"\n")?;
         written += writer.write(self.qual())?;
         written += writer.write(b"\n")?;
@@ -290,12 +277,6 @@ fn read_header(buffer: &[u8]) -> Result<Option<usize>> {
 
 
 #[inline]
-fn read_seq(buffer: &[u8]) -> Result<Option<usize>> {
-    Ok(memchr(b'\n', buffer))
-}
-
-
-#[inline]
 fn read_sep(buffer: &[u8]) -> Result<Option<usize>> {
     match buffer.first() {
         None => { return Ok(None) },
@@ -308,12 +289,6 @@ fn read_sep(buffer: &[u8]) -> Result<Option<usize>> {
 }
 
 
-#[inline]
-fn read_qual(buffer: &[u8]) -> Result<Option<usize>> {
-    Ok(memchr(b'\n', buffer))
-}
-
-
 impl<'a> RefRecord<'a> {
     /// Copy the borrowed data array and return an owned record.
     pub fn to_owned_record(&self) -> OwnedRecord {
@@ -321,7 +296,7 @@ impl<'a> RefRecord<'a> {
             seq: self.seq().to_vec(),
             qual: self.qual().to_vec(),
             head: self.head().to_vec(),
-            sep: trim_winline(&self.data[self.seq + 1..self.sep]).to_vec()
+            sep: Some(trim_winline(&self.data[self.seq + 1..self.sep]).to_vec())
         }
     }
 }
@@ -364,7 +339,7 @@ impl IdxRecord {
         let pos = head_end + 1;
 
         let buffer_ = &buffer[pos..];
-        let seq_end = match read_seq(buffer_)? {
+        let seq_end = match memchr(b'\n', buffer_) {
             None => { return Ok(IdxRecordResult::Incomplete) },
             Some(end) => end + pos
         };
@@ -378,7 +353,7 @@ impl IdxRecord {
         let pos = sep_end + 1;
 
         let buffer_ = &buffer[pos..];
-        let qual_end = match read_qual(buffer_)? {
+        let qual_end = match memchr(b'\n', buffer_) {
             None => { return Ok(IdxRecordResult::Incomplete) },
             Some(end) => end + pos,
         };
@@ -408,6 +383,72 @@ pub struct Parser<R: Read> {
 }
 
 
+/// Create a parser and guess the compression.
+///
+/// At the moment this supports gzip, lz4 and plain fastq files.
+/// If the path is None, read from stdin.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use fastq::{parse_path, Record};
+/// use std::env::args;
+///
+/// let filename = args().nth(1);
+/// // Accept "-" as stdin
+/// let path = match filename.as_ref().map(String::as_ref) {
+///     None | Some("-") => { None },
+///     Some(name) => Some(name)
+/// };
+///
+/// parse_path(path, |mut parser| {
+///     let stopped = parser.each(|record| {
+///         // stop parsing if we find a sequnce containing 'N'
+///         record.validate_dnan()
+///     }).expect("Invalid fastq file");
+///     if stopped {
+///         println!("The file contains only sequences with ACTGN");
+///     } else {
+///         println!("The file contains invalid sequences");
+///     }
+/// }).expect("Invalid compression");
+/// ```
+pub fn parse_path<P, F, O>(path: Option<P>, func: F) -> Result<O>
+        where P: AsRef<Path>,
+              F: FnOnce(Parser<Box<&mut Read>>) -> O
+{
+    let mut reader: Box<Read + Send> = match path {
+        None => {
+            Box::new(std::io::stdin())
+        },
+        Some(path) => {
+            Box::new(std::fs::File::open(path)?)
+        }
+    };
+    let mut magic_bytes = [0u8; 4];
+    reader.read_exact(&mut magic_bytes)?;
+    let mut reader = Cursor::new(magic_bytes.to_vec()).chain(reader);
+    if unsafe { std::mem::transmute::<_, u32>(magic_bytes.clone()) }.to_le() ==  0x184D2204 {
+        let bufsize = 1<<22;
+        let queuelen = 2;
+        return Ok(thread_reader(bufsize, queuelen, Decoder::new(reader)?, |reader| {
+            func(Parser::new(Box::new(reader)))
+        }).expect("lz4 reader thread paniced"))
+    } else if &magic_bytes[..2] == b"\x1f\x8b" {
+        let bufsize = 1<<22;
+        let queuelen = 2;
+        let reader = GzDecoder::new(reader)?;
+        return Ok(thread_reader(bufsize, queuelen, reader, |reader| {
+            func(Parser::new(Box::new(reader)))
+        }).expect("gzip reader thread paniced"))
+    } else if magic_bytes[0] == b'@' {
+        Ok(func(Parser::new(Box::new(&mut reader))))
+    } else {
+        return Err(Error::new(ErrorKind::InvalidData, "Not a gzip, lz4 or plain fastq file"))
+    }
+}
+
+
 impl<R: Read> Parser<R> {
     /// Create a new fastq parser.
     pub fn new(reader: R) -> Parser<R> {
@@ -418,31 +459,36 @@ impl<R: Read> Parser<R> {
     }
 
     /// Apply a function to each fastq record in an file.
+    ///
+    /// Stop the parser if the closure returns `false`.
+    /// Return `true`, if the parser reached the end of the file.
     #[inline]
-    pub fn each<F>(&mut self, mut func: F) -> Result<()> where F: FnMut(RefRecord) {
+    pub fn each<F>(&mut self, mut func: F) -> Result<bool> where F: FnMut(RefRecord) -> bool {
         loop {
             match IdxRecord::from_buffer(self.buffer.data())? {
                 IdxRecordResult::EmptyBuffer => {
                     self.buffer.clean();
                     if self.buffer.read_into(&mut self.reader)? == 0 {
-                        return Ok(())
+                        return Ok(true)
                     };
                 }
                 IdxRecordResult::Incomplete => {
-                    let freed = self.buffer.clean();
-                    if freed == 0 {
+                    self.buffer.clean();
+                    if self.buffer.n_free() == 0 {
                         return Err(Error::new(ErrorKind::InvalidData,
                                               "Fastq record is too long"));
                     }
                     if self.buffer.read_into(&mut self.reader)? == 0 {
                         return Err(Error::new(ErrorKind::InvalidData,
                                               "Possibly truncated input file."))
-
                     }
                 }
                 IdxRecordResult::Record(record) => {
-                    func(record.to_ref_record(self.buffer.data()));
+                    let go_on = func(record.to_ref_record(self.buffer.data()));
                     self.buffer.consume(record.data.1 - record.data.0);
+                    if !go_on {
+                        return Ok(false)
+                    }
                 }
             }
         }
@@ -467,7 +513,6 @@ impl RecordSet {
     }
 
     /// Return an iterator over all fastq records in this record set.
-    #[inline]
     pub fn iter<'a>(&'a self) -> RecordSetItems<'a> {
         RecordSetItems { idx_records: self.records.iter(), buffer: &self.buffer }
     }
@@ -491,6 +536,7 @@ pub struct RecordSetItems<'a> {
 impl<'a> Iterator for RecordSetItems<'a> {
     type Item = RefRecord<'a>;
 
+    #[inline]
     fn next(&mut self) -> Option<RefRecord<'a>> {
         match self.idx_records.next() {
             Some(idx_record) => {
@@ -541,18 +587,18 @@ impl<R: Read> Iterator for RecordSetIter<R> {
                     return Some(Ok(RecordSet::from_records(buffer, records)))
                 }
                 Incomplete => {
-                    if self.reader_at_end {
-                        return Some(Err(Error::new(ErrorKind::InvalidData,
-                                                   "Truncated input file.")))
-                    }
                     self.num_records_guess = records.len() + 1;
 
                     let buffer = vec![0u8; BUFSIZE].into_boxed_slice();
                     let buffer = self.parser.buffer.replace_buffer(buffer);
+                    if self.parser.buffer.n_free() == 0 {
+                        return Some(Err(Error::new(ErrorKind::InvalidData,
+                                                   "Fastq record is too long.")))
+                    }
                     match self.parser.buffer.read_into(&mut self.parser.reader) {
                         Err(e) => { return Some(Err(e)) }
                         Ok(0) => { return Some(Err(Error::new(ErrorKind::InvalidData,
-                                                              "Fastq record is too long."))) }
+                                                              "Truncated input file."))) }
                         _ => { }
                     }
                     return Some(Ok(RecordSet::from_records(buffer, records)))
@@ -748,6 +794,7 @@ mod tests {
             }
             assert!(i < 2);
             i += 1;
+            true
         });
         ok.unwrap();
     }
@@ -760,6 +807,7 @@ mod tests {
             assert_eq!(record.head(), b"");
             assert_eq!(record.seq(), b"NN");
             assert_eq!(record.qual(), b"++");
+            true
         }).unwrap();
     }
 
@@ -771,10 +819,11 @@ mod tests {
             assert_eq!(record.head(), b"hi");
             assert_eq!(record.seq(), b"NN");
             assert_eq!(record.qual(), b"++");
+            true
         });
         match ok {
             Err(e) => { assert!(e.kind() == ErrorKind::InvalidData) },
-            Ok(()) => { panic!("should fail") },
+            Ok(_) => { panic!("should fail") },
         }
     }
 
@@ -782,7 +831,7 @@ mod tests {
     fn truncated() {
         let data = Cursor::new(b"@hi\nNN\n+\n++");
         let mut parser = Parser::new(data);
-        let ok = parser.each(|_| { assert!(false) });
+        let ok = parser.each(|_| { assert!(false); true });
         assert!(ok.is_err());
     }
 
@@ -798,6 +847,7 @@ mod tests {
             let mut out = Cursor::new(Vec::new());
             assert_eq!(record.write(&mut out).unwrap(), 14);
             assert_eq!(&out.into_inner()[..], b"@hi\nNN\n+hi\n++\n");
+            true
         });
         ok.unwrap();
     }
@@ -810,6 +860,7 @@ mod tests {
             assert_eq!(record.head(), b"hi");
             assert_eq!(record.seq(), b"NN");
             assert_eq!(record.qual(), b"++");
+            true
         });
         ok.unwrap();
     }
@@ -818,7 +869,7 @@ mod tests {
     fn length_mismatch() {
         let data = Cursor::new(b"@hi\nNN\n+\n+\n");
         let mut parser = Parser::new(data);
-        let ok = parser.each(|_| { assert!(false) });
+        let ok = parser.each(|_| { assert!(false); true });
         assert!(ok.is_err());
     }
 
@@ -831,7 +882,7 @@ mod tests {
         };
         data.seek(SeekFrom::Start(0)).unwrap();
         let mut parser = Parser::new(data);
-        assert!(parser.each(|_| ()).is_err());
+        assert!(parser.each(|_| true).is_err());
     }
 
 

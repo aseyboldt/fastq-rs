@@ -1,54 +1,36 @@
-use fastq::Parser;
-use std::io::{stderr, stdin, Read, Write, ErrorKind, Result};
-use fastq::{Record, thread_reader};
-use std::fs::File;
+use fastq::{parse_path, Record};
 use std::env::args;
-
 use parasailors as align;
 
 extern crate fastq;
-extern crate lz4;
 extern crate parasailors;
 
-const BUFSIZE: usize = 1 << 22;
-const N_THREADS: usize = 2;
-
-
 fn main() {
-    let file: Box<Read + Send> = match args().nth(1).as_ref().map(String::as_ref) {
-        None | Some("-") => { Box::new(stdin()) },
-        Some(path) => { Box::new(File::open(path).unwrap()) }
+    let filename = args().nth(1);
+    let path = match filename.as_ref().map(String::as_ref) {
+        None | Some("-") => { None },
+        Some(name) => Some(name)
     };
-    let file = lz4::Decoder::new(file).unwrap();
 
-    let results: Result<Vec<_>> = thread_reader(BUFSIZE, 2, file, |reader| {
-        let parser = Parser::new(reader);
-        let results = parser.parallel_each(N_THREADS, |record_sets| {
+    let results = parse_path(path, |parser| {
+        let nthreads = 2;
+        let results: Vec<usize> = parser.parallel_each(nthreads, |record_sets| {
+            let adapter = b"AATGATACGGCGACCACCGAGATCTACACTCTTTCCCTACACGACGCTCTTCCGATCT";
             let matrix = align::Matrix::new(align::MatrixType::Identity);
-            let profile = align::Profile::new(b"ATTAATCCAT", &matrix);
+            let profile = align::Profile::new(adapter, &matrix);
+            let mut thread_total = 0;
 
-            let mut thread_total: u64 = 0;
             for record_set in record_sets {
                 for record in record_set.iter() {
-                    let score = align::local_alignment_score(&profile, record.seq(), 2, 1);
-                    if score > 7 {
+                    let score = align::local_alignment_score(&profile, record.seq(), 5, 1);
+                    if score > 10 {
                         thread_total += 1;
                     }
                 }
             }
             thread_total
-        });
+        }).expect("Invalid fastq file");
         results
-    }).expect("Reader thread paniced");
-
-    match results {
-        Ok(vals) => { println!("total = {}", vals.iter().sum::<u64>()) },
-        Err(e) => {
-            if e.kind() == ErrorKind::InvalidData {
-                write!(stderr(), "Error in fastq file: {}", e).unwrap()
-            } else {
-                write!(stderr(), "IOError: {}", e).unwrap()
-            }
-        },
-    }
+    }).expect("Invalid compression");
+    println!("{}", results.iter().sum::<usize>());
 }

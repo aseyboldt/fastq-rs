@@ -3,7 +3,6 @@ use std::env::args;
 
 extern crate fastq;
 
-
 fn main() {
     let filename = args().nth(1);
     let path = match filename.as_ref().map(String::as_ref) {
@@ -11,12 +10,14 @@ fn main() {
         Some(name) => Some(name)
     };
 
-    let mut total: usize = 0;
-    parse_path(path, |mut parser| {
-        parser.each(|_| {
-            total += 1;
-            true
+    parse_path(path, |parser| {
+        let results: Vec<usize> = parser.parallel_each(1, |record_sets| {
+            let mut thread_total = 0;
+            for record_set in record_sets {
+                thread_total += record_set.len();
+            }
+            thread_total
         }).expect("Invalid fastq file");
+        println!("{}", results.iter().sum::<usize>());
     }).expect("Invalid compression");
-    println!("{}", total);
 }
