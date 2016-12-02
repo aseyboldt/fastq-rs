@@ -216,7 +216,8 @@ impl<'a> Record for RefRecord<'a> {
 
     #[inline]
     fn write<W: Write>(&self, writer: &mut W) -> Result<usize> {
-        writer.write_all(&self.data).map(|_| self.data.len())
+        writer.write_all(&self.data)?;
+        Ok(self.data.len())
     }
 }
 
@@ -572,6 +573,7 @@ impl<R: Read> Iterator for RecordSetIter<R> {
                     Err(e) => { return Some(Err(e)) }
                 }
             };
+            let buffer_pos = self.parser.buffer.pos();
             use IdxRecordResult::*;
             match parse_result {
                 EmptyBuffer => {
@@ -603,7 +605,9 @@ impl<R: Read> Iterator for RecordSetIter<R> {
                     }
                     return Some(Ok(RecordSet::from_records(buffer, records)))
                 }
-                Record(record) => {
+                Record(mut record) => {
+                    record.data.0 += buffer_pos;
+                    record.data.1 += buffer_pos;
                     let (start, end) = (record.data.0, record.data.1);
                     records.push(record);
                     self.parser.buffer.consume(end - start);

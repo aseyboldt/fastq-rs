@@ -25,11 +25,14 @@ impl Buffer {
         self.data.len().checked_sub(self.end).unwrap()
     }
 
+    pub fn pos(&self) -> usize {
+        self.start
+    }
+
     pub fn replace_buffer(&mut self, mut buffer: Box<[u8]>) -> Box<[u8]> {
         let n_in_buffer = self.len();
         let new_end = (n_in_buffer + 15) & !0x0f;  // make sure next read is aligned
-        let num_move = self.end.checked_sub(new_end).unwrap();
-        let new_start = self.start.checked_sub(num_move).unwrap();
+        let new_start = new_end.checked_sub(n_in_buffer).unwrap();
 
         assert!(buffer.len() >= new_end);
 
@@ -54,10 +57,10 @@ impl Buffer {
             return 0
         }
 
+        let old_free = self.n_free();
         let n_in_buffer = self.len();
         let new_end = (n_in_buffer + 15) & !0x0f;  // make sure next read is aligned
-        let num_move = self.end.checked_sub(new_end).unwrap();
-        let new_start = self.start.checked_sub(num_move).unwrap();
+        let new_start = new_end.checked_sub(n_in_buffer).unwrap();
 
         let dest = self.data[new_start..].as_mut_ptr();
         let src = self.data[self.start..].as_ptr();
@@ -66,7 +69,7 @@ impl Buffer {
         self.start = new_start;
         self.end = new_end;
 
-        num_move
+        self.n_free().checked_sub(old_free).unwrap()
     }
 
     pub fn read_into<R: Read>(&mut self, reader: &mut R) -> Result<usize> {
