@@ -113,7 +113,7 @@ use std::iter::FromIterator;
 use std::path::Path;
 use memchr::memchr;
 use lz4::Decoder;
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 
 extern crate memchr;
 extern crate lz4;
@@ -170,10 +170,12 @@ pub struct RefRecord<'a> {
 /// A fastq record that ownes its data arrays.
 #[derive(Debug)]
 pub struct OwnedRecord {
-    pub head: Vec<u8>,
-    pub seq: Vec<u8>,
-    pub sep: Option<Vec<u8>>,
-    pub qual: Vec<u8>,
+    // (start, stop), but might include \r at the end
+    head: usize,
+    seq: usize,
+    sep: usize,
+    qual: usize,
+    data: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -223,34 +225,26 @@ impl<'a> Record for RefRecord<'a> {
 
 
 impl Record for OwnedRecord {
+    #[inline]
     fn head(&self) -> &[u8] {
         // skip the '@' at the beginning
-        &self.head
+        trim_winline(&self.data[1 .. self.head])
     }
 
+    #[inline]
     fn seq(&self) -> &[u8] {
-        &self.seq
+        trim_winline(&self.data[self.head + 1 .. self.seq])
     }
 
+    #[inline]
     fn qual(&self) -> &[u8] {
-        &self.qual
+        trim_winline(&self.data[self.sep + 1 .. self.qual])
     }
 
+    #[inline]
     fn write<W: Write>(&self, writer: &mut W) -> Result<usize> {
-        let mut written = 0;
-        written += writer.write(b"@")?;
-        written += writer.write(self.head())?;
-        written += writer.write(b"\n")?;
-        written += writer.write(self.seq())?;
-        written += writer.write(b"\n")?;
-        match self.sep {
-            Some(ref s) => { written += writer.write(s)? }
-            None => { written += writer.write(b"+")? }
-        }
-        written += writer.write(b"\n")?;
-        written += writer.write(self.qual())?;
-        written += writer.write(b"\n")?;
-        Ok(written)
+        writer.write_all(&self.data)?;
+        Ok(self.data.len())
     }
 }
 
@@ -294,10 +288,11 @@ impl<'a> RefRecord<'a> {
     /// Copy the borrowed data array and return an owned record.
     pub fn to_owned_record(&self) -> OwnedRecord {
         OwnedRecord {
-            seq: self.seq().to_vec(),
-            qual: self.qual().to_vec(),
-            head: self.head().to_vec(),
-            sep: Some(trim_winline(&self.data[self.seq + 1..self.sep]).to_vec())
+            head: self.head,
+            seq: self.seq,
+            sep: self.sep,
+            qual: self.qual,
+            data: self.data.to_vec(),
         }
     }
 }
@@ -438,7 +433,7 @@ pub fn parse_path<P, F, O>(path: Option<P>, func: F) -> Result<O>
     } else if &magic_bytes[..2] == b"\x1f\x8b" {
         let bufsize = 1<<22;
         let queuelen = 2;
-        let reader = GzDecoder::new(reader)?;
+        let reader = MultiGzDecoder::new(reader)?;
         return Ok(thread_reader(bufsize, queuelen, reader, |reader| {
             func(Parser::new(Box::new(reader)))
         }).expect("gzip reader thread paniced"))
@@ -524,6 +519,43 @@ impl RecordSet {
 
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
+    }
+}
+
+pub struct OwnedRecordIter<R: Read> {
+    record_set_iter: RecordSetIter<R>,
+    current_record_set: Option<RecordSet>,
+    pos: usize,
+}
+
+impl<R: Read> Iterator for OwnedRecordIter<R> {
+    type Item = OwnedRecord;
+
+    #[inline]
+    fn next(&mut self) -> Option<OwnedRecord> {
+
+        if self.current_record_set.is_none() || self.current_record_set.as_ref().unwrap().records.len() == self.pos {
+            match self.record_set_iter.next() {
+                Some(Ok(rs)) => { 
+                    self.current_record_set = Some(rs);
+                    self.pos = 0;
+                },
+                _ => {
+                    self.current_record_set = None;
+                    return None;
+                }
+            }
+        }
+
+        match self.current_record_set {
+            Some(ref rs) => {       
+                let ref idx_record = rs.records[self.pos];
+                let ref_rec = idx_record.to_ref_record(&rs.buffer);
+                self.pos += 1;
+                Some(ref_rec.to_owned_record())
+            },
+            _ => None
+        }
     }
 }
 
@@ -625,6 +657,16 @@ impl<R: Read> Parser<R> {
             parser: self,
             reader_at_end: false,
             num_records_guess: 100,
+        }
+    }
+
+    ///
+    pub fn owned_records(self) -> OwnedRecordIter<R> {
+        let rec_sets = self.record_sets();
+        OwnedRecordIter {
+            record_set_iter: rec_sets,
+            current_record_set: None,
+            pos: 0,
         }
     }
 

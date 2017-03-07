@@ -12,7 +12,8 @@ keywords = ["bio", "fastq", "parser"]
 [dependencies]
 memchr = ">=0.1"
 lz4 = "^1.20"
-flate2 = { version = "^0.2", features = ["zlib"], default-features = false }
+#flate2 = { version = "^0.2", features = ["zlib"], default-features = false }
+flate2 = { git = "https://github.com/veldsla/flate2-rs.git", branch = "multigz"}
 
 [dev-dependencies]
 parasailors = "^0.3"
