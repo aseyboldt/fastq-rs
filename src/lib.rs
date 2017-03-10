@@ -112,11 +112,9 @@ use std::sync::Arc;
 use std::iter::FromIterator;
 use std::path::Path;
 use memchr::memchr;
-use lz4::Decoder;
 use flate2::read::MultiGzDecoder;
 
 extern crate memchr;
-extern crate lz4;
 extern crate flate2;
 
 mod thread_reader;
@@ -424,13 +422,7 @@ pub fn parse_path<P, F, O>(path: Option<P>, func: F) -> Result<O>
     let mut magic_bytes = [0u8; 4];
     reader.read_exact(&mut magic_bytes)?;
     let mut reader = Cursor::new(magic_bytes.to_vec()).chain(reader);
-    if unsafe { std::mem::transmute::<_, u32>(magic_bytes.clone()) }.to_le() ==  0x184D2204 {
-        let bufsize = 1<<22;
-        let queuelen = 2;
-        return Ok(thread_reader(bufsize, queuelen, Decoder::new(reader)?, |reader| {
-            func(Parser::new(Box::new(reader)))
-        }).expect("lz4 reader thread paniced"))
-    } else if &magic_bytes[..2] == b"\x1f\x8b" {
+    if &magic_bytes[..2] == b"\x1f\x8b" {
         let bufsize = 1<<22;
         let queuelen = 2;
         let reader = MultiGzDecoder::new(reader)?;
