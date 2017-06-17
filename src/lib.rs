@@ -60,10 +60,10 @@
 //! ```rust,no_run
 //! use fastq::{parse_path, Record};
 //! use std::env::args;
-//! use parasailors as align;
+//! use bio::alignment::pairwise::*;
 //!
 //! extern crate fastq;
-//! extern crate parasailors;
+//! extern crate bio;
 //!
 //! fn main() {
 //!     let filename = args().nth(1);
@@ -78,13 +78,16 @@
 //!         let results: Vec<usize> = parser.parallel_each(nthreads, |record_sets| {
 //!             // we can initialize thread local variables here.
 //!             let adapter = b"AATGATACGGCGACCACCGAGATCTACACTCTTTCCCTACACGACGCTCTTCCGATCT";
-//!             let matrix = align::Matrix::new(align::MatrixType::Identity);
-//!             let profile = align::Profile::new(adapter, &matrix);
+//! 
+//!             let score = |a: u8, b: u8| if a == b {1i32} else {-1i32};
+//!             let mut aligner = Aligner::new(-5, -1, &score);
+//!
 //!             let mut thread_total = 0;
 //!
 //!             for record_set in record_sets {
 //!                 for record in record_set.iter() {
-//!                     let score = align::local_alignment_score(&profile, record.seq(), 5, 1);
+//!                     let alignment = aligner.semiglobal(adapter, record.seq());
+//!                     let score = alignment.score;
 //!                     if score > 8 {
 //!                         thread_total += 1;
 //!                     }
