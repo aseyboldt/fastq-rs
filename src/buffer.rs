@@ -59,6 +59,10 @@ impl Buffer {
         let new_end = (n_in_buffer + 15) & !0x0f;  // make sure next read is aligned
         let new_start = new_end.checked_sub(n_in_buffer).unwrap();
 
+        if new_start >= self.start {
+            return
+        }
+
         let dest = self.data[new_start..].as_mut_ptr();
         let src = self.data[self.start..].as_ptr();
 
