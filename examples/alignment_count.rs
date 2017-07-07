@@ -1,9 +1,9 @@
 use fastq::{parse_path, Record};
 use std::env::args;
-use parasailors as align;
+use bio::alignment::pairwise::*;
 
 extern crate fastq;
-extern crate parasailors;
+extern crate bio;
 
 const ADAPTER: &'static [u8] = b"AATGATACGGCGACCACCGAGA\
                                  TCTACACTCTTTCCCTACACGA\
@@ -19,14 +19,15 @@ fn main() {
     let results = parse_path(path, |parser| {
         let nthreads = 2;
         let results: Vec<usize> = parser.parallel_each(nthreads, |record_sets| {
-            let matrix = align::Matrix::new(align::MatrixType::Identity);
-            let profile = align::Profile::new(ADAPTER, &matrix);
+
+            let score = |a: u8, b: u8| if a == b {1i32} else {-1i32};
+            let mut aligner = Aligner::new(-5, -1, &score);
+            
             let mut thread_total = 0;
 
             for record_set in record_sets {
                 for record in record_set.iter() {
-                    let score = align::local_alignment_score(
-                            &profile, record.seq(), 8, 1);
+                    let score = aligner.semiglobal(ADAPTER, record.seq()).score;
                     if score > 10 {
                         thread_total += 1;
                     }
