@@ -1,6 +1,6 @@
 [package]
 name = "fastq"
-version = "0.4.1"
+version = "0.4.2"
 authors = ["Adrian Seyboldt <adrian.seyboldt@gmail.com>"]
 description = "A parser for fastq"
 license = "MIT"
