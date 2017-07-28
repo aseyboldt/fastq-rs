@@ -416,7 +416,7 @@ pub struct Parser<R: Read> {
 /// ```
 pub fn parse_path<P, F, O>(path: Option<P>, func: F) -> Result<O>
         where P: AsRef<Path>,
-              F: FnOnce(Parser<Box<&mut Read>>) -> O
+              F: FnOnce(Parser<&mut Read>) -> O
 {
     let mut reader: Box<Read + Send> = match path {
         None => {
@@ -432,18 +432,18 @@ pub fn parse_path<P, F, O>(path: Option<P>, func: F) -> Result<O>
     if unsafe { std::mem::transmute::<_, u32>(magic_bytes.clone()) }.to_le() ==  0x184D2204 {
         let bufsize = 1<<22;
         let queuelen = 2;
-        return Ok(thread_reader(bufsize, queuelen, Decoder::new(reader)?, |reader| {
-            func(Parser::new(Box::new(reader)))
+        return Ok(thread_reader(bufsize, queuelen, Decoder::new(reader)?, |mut reader| {
+            func(Parser::new(&mut reader))
         }).expect("lz4 reader thread paniced"))
     } else if &magic_bytes[..2] == b"\x1f\x8b" {
         let bufsize = 1<<22;
         let queuelen = 2;
         let reader = MultiGzDecoder::new(reader)?;
-        return Ok(thread_reader(bufsize, queuelen, reader, |reader| {
-            func(Parser::new(Box::new(reader)))
+        return Ok(thread_reader(bufsize, queuelen, reader, |mut reader| {
+            func(Parser::new(&mut reader))
         }).expect("gzip reader thread paniced"))
     } else if magic_bytes[0] == b'@' {
-        Ok(func(Parser::new(Box::new(&mut reader))))
+        Ok(func(Parser::new(&mut reader)))
     } else {
         return Err(Error::new(ErrorKind::InvalidData, "Not a gzip, lz4 or plain fastq file"))
     }
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn correct() {
         let data = Cursor::new(b"@hi\nNN\n+\n++\n@hallo\nTCC\n+\nabc\n");
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         let mut i: u64 = 0;
         let ok = parser.each(move |record| {
             if i == 0 {
@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn empty_id() {
         let data = Cursor::new(b"@\nNN\n+\n++\n");
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         parser.each(|record| {
             assert_eq!(record.head(), b"");
             assert_eq!(record.seq(), b"NN");
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn missing_lines() {
         let data = Cursor::new(b"@hi\nNN\n+\n++\n@hi\nNN");
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         let ok = parser.each(|record| {
             assert_eq!(record.head(), b"hi");
             assert_eq!(record.seq(), b"NN");
@@ -928,7 +928,7 @@ mod tests {
     #[test]
     fn truncated() {
         let data = Cursor::new(b"@hi\nNN\n+\n++");
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         let ok = parser.each(|_| { assert!(false); true });
         assert!(ok.is_err());
     }
@@ -936,7 +936,7 @@ mod tests {
     #[test]
     fn second_idline() {
         let data = Cursor::new(b"@hi\nNN\n+hi\n++\n@hi\nNN\n+hi\n++\n");
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         let ok = parser.each(|record| {
             assert_eq!(record.head(), b"hi");
             assert_eq!(record.seq(), b"NN");
@@ -953,7 +953,7 @@ mod tests {
     #[test]
     fn windows_lineend() {
         let data = Cursor::new(b"@hi\r\nNN\r\n+\r\n++\r\n@hi\r\nNN\r\n+\r\n++\r\n");
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         let ok = parser.each(|record| {
             assert_eq!(record.head(), b"hi");
             assert_eq!(record.seq(), b"NN");
@@ -966,7 +966,7 @@ mod tests {
     #[test]
     fn length_mismatch() {
         let data = Cursor::new(b"@hi\nNN\n+\n+\n");
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         let ok = parser.each(|_| { assert!(false); true });
         assert!(ok.is_err());
     }
@@ -979,7 +979,7 @@ mod tests {
             data.write(b"longid").unwrap();
         };
         data.seek(SeekFrom::Start(0)).unwrap();
-        let mut parser = Parser::new(data);
+        let parser = Parser::new(data);
         assert!(parser.each(|_| true).is_err());
     }
 

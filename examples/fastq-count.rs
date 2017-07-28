@@ -12,7 +12,7 @@ fn main() {
     };
 
     let mut total: usize = 0;
-    parse_path(path, |mut parser| {
+    parse_path(path, |parser| {
         parser.each(|_| {
             total += 1;
             true
