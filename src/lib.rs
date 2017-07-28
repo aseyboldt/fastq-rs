@@ -450,7 +450,7 @@ pub fn parse_path<P, F, O>(path: Option<P>, func: F) -> Result<O>
 }
 
 
-impl<R: Read> Parser<R> {
+impl<'a, R: 'a + Read> Parser<R> {
     /// Create a new fastq parser.
     pub fn new(reader: R) -> Parser<R> {
         Parser {
@@ -459,37 +459,93 @@ impl<R: Read> Parser<R> {
         }
     }
 
+    fn ref_iter(self) -> RecordRefIter<R> {
+        RecordRefIter {
+            parser: self,
+            current_length: None,
+            current: None,
+        }
+    }
+
     /// Apply a function to each fastq record in an file.
     ///
     /// Stop the parser if the closure returns `false`.
     /// Return `true`, if the parser reached the end of the file.
     #[inline]
-    pub fn each<F>(&mut self, mut func: F) -> Result<bool> where F: FnMut(RefRecord) -> bool {
+    pub fn each<F>(self, mut func: F) -> Result<bool> where F: FnMut(RefRecord) -> bool {
+        let mut iter = self.ref_iter();
         loop {
-            match IdxRecord::from_buffer(self.buffer.data())? {
-                IdxRecordResult::EmptyBuffer => {
-                    self.buffer.clean();
-                    if self.buffer.read_into(&mut self.reader)? == 0 {
-                        return Ok(true)
-                    };
-                }
-                IdxRecordResult::Incomplete => {
-                    self.buffer.clean();
-                    if self.buffer.n_free() == 0 {
-                        return Err(Error::new(ErrorKind::InvalidData,
-                                              "Fastq record is too long"));
-                    }
-                    if self.buffer.read_into(&mut self.reader)? == 0 {
-                        return Err(Error::new(ErrorKind::InvalidData,
-                                              "Possibly truncated input file."))
-                    }
-                }
-                IdxRecordResult::Record(record) => {
-                    let go_on = func(record.to_ref_record(self.buffer.data()));
-                    self.buffer.consume(record.data.1 - record.data.0);
+            iter.advance()?;
+            match iter.get() {
+                None => { return Ok(true) },
+                Some(record) => {
+                    let go_on = func(record);
                     if !go_on {
                         return Ok(false)
                     }
+                }
+            }
+        }
+    }
+}
+
+
+pub struct RecordRefIter<R: Read> {
+    parser: Parser<R>,
+    current: Option<IdxRecord>,
+    current_length: Option<usize>,
+}
+
+
+impl<R: Read> RecordRefIter<R> {
+    pub fn get(&self) -> Option<RefRecord> {
+        match self.current {
+            None => None,
+            Some(ref rec) => Some(rec.to_ref_record(self.parser.buffer.data()))
+        }
+    }
+
+    pub fn advance(&mut self) -> Result<()> {
+        let mut buffer = &mut self.parser.buffer;
+        let mut reader = &mut self.parser.reader;
+        if let Some(len) = self.current_length.take() {
+            buffer.consume(len);
+        }
+        loop {
+            match IdxRecord::from_buffer(buffer.data()) {
+                Err(e) => { return Err(e) },
+                Ok(IdxRecordResult::EmptyBuffer) => {
+                    buffer.clean();
+                    match buffer.read_into(reader) {
+                        Err(e) => { return Err(e) },
+                        Ok(0) => {
+                            self.current = None;
+                            self.current_length = None;
+                            return Ok(())
+                        },
+                        _ => { continue }
+                    }
+                },
+                Ok(IdxRecordResult::Incomplete) => {
+                    buffer.clean();
+                    if buffer.n_free() == 0 {
+                        return Err(Error::new(ErrorKind::InvalidData,
+                                              "Fastq record is too long"));
+                    }
+                    match buffer.read_into(reader) {
+                        Err(e) => { return Err(e) }
+                        Ok(0) => {
+                            return Err(Error::new(ErrorKind::InvalidData,
+                                                  "Possibly truncated input file"));
+                        },
+                        _ => { continue }
+                    }
+                },
+                Ok(IdxRecordResult::Record(record)) => {
+                    let length = record.data.1.checked_sub(record.data.0).unwrap();
+                    self.current = Some(record);
+                    self.current_length = Some(length);
+                    return Ok(());
                 }
             }
         }
@@ -549,7 +605,7 @@ impl<'a> Iterator for RecordSetItems<'a> {
 }
 
 
-pub struct RecordSetIter<R: Read> {
+struct RecordSetIter<R: Read> {
     parser: Parser<R>,
     num_records_guess: usize,
     reader_at_end: bool,
@@ -620,7 +676,7 @@ impl<R: Read> Iterator for RecordSetIter<R> {
 
 impl<R: Read> Parser<R> {
     /// Return the fastq records in chunks.
-    pub fn record_sets(self) -> RecordSetIter<R> {
+    fn record_sets(self) -> RecordSetIter<R> {
         RecordSetIter {
             parser: self,
             reader_at_end: false,
@@ -755,6 +811,44 @@ impl<R: Read> Parser<R> {
         match io_error {
             Some(e) => { Err(e) },
             None => { Ok(results) }
+        }
+    }
+}
+
+
+/// Step through two fastq files and call a callback for pairs of Records.
+///
+/// The callback returns a tuple of bools that indicate for each parser
+/// if it should advance the iterator. This can be used to deal with
+/// single reads that are interleaved in paired sequences and would otherwise
+/// lead to misaligned pairs.
+pub fn each_zipped<R1, R2, F>(parser1: Parser<R1>, parser2: Parser<R2>, mut callback: F)
+    -> Result<(bool, bool)>
+    where
+        R1: Read,
+        R2: Read,
+        F: FnMut(Option<RefRecord>, Option<RefRecord>) -> (bool, bool)
+{
+    let mut iter1 = parser1.ref_iter();
+    let mut iter2 = parser2.ref_iter();
+    let mut finished = (false, false);
+    iter1.advance()?;
+    iter2.advance()?;
+    loop {
+        let advance_flags =  {
+            let val1 = if finished.0 { None } else { iter1.get() };
+            let val2 = if finished.1 { None } else { iter2.get() };
+            finished = (val1.is_none(), val2.is_none());
+            callback(val1, val2)
+        };
+        if advance_flags == (false, false) || finished == (true, true) {
+            return Ok(finished);
+        }
+        if advance_flags.0 && !finished.0 {
+            iter1.advance()?;
+        }
+        if advance_flags.1 && !finished.1 {
+            iter2.advance()?;
         }
     }
 }
