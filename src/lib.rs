@@ -113,7 +113,7 @@ use std::iter::FromIterator;
 use std::path::Path;
 use memchr::memchr;
 use lz4::Decoder;
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 
 extern crate memchr;
 extern crate lz4;
@@ -438,7 +438,7 @@ pub fn parse_path<P, F, O>(path: Option<P>, func: F) -> Result<O>
     } else if &magic_bytes[..2] == b"\x1f\x8b" {
         let bufsize = 1<<22;
         let queuelen = 2;
-        let reader = GzDecoder::new(reader)?;
+        let reader = MultiGzDecoder::new(reader)?;
         return Ok(thread_reader(bufsize, queuelen, reader, |reader| {
             func(Parser::new(Box::new(reader)))
         }).expect("gzip reader thread paniced"))
