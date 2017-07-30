@@ -574,7 +574,10 @@ impl<R: Read> Parser<R> {
 /// The callback returns a tuple of bools that indicate for each parser
 /// if it should advance the iterator. This can be used to deal with
 /// single reads that are interleaved in paired sequences and would otherwise
-/// lead to misaligned pairs.
+/// lead to misaligned pairs. Iteration ends if either both advance flags
+/// are `false` or if both iterators are exhausted.
+///
+/// The returned bool tuple indicates which parsers were exhausetd.
 pub fn each_zipped<R1, R2, F>(parser1: Parser<R1>, parser2: Parser<R2>, mut callback: F)
     -> Result<(bool, bool)>
     where
