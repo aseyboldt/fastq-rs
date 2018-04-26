@@ -212,7 +212,8 @@ impl<'a, R: 'a + Read> Parser<R> {
         }
     }
 
-    fn ref_iter(self) -> RecordRefIter<R> {
+    /// Get a RecordRefIter for this parser. Should only be used in custom iteration scenarios.
+    pub fn ref_iter(self) -> RecordRefIter<R> {
         RecordRefIter {
             parser: self,
             current_length: None,
