@@ -126,8 +126,11 @@ pub use thread_reader::thread_reader;
 pub use records::{RefRecord, Record, OwnedRecord};
 use records::{IdxRecord, IdxRecordResult};
 
-const BUFSIZE: usize = 68 * 1024;
 
+#[cfg(fuzzing)]
+const BUFSIZE: usize = 256;
+#[cfg(not(fuzzing))]
+const BUFSIZE: usize = 68 * 1024;
 
 
 /// Parser for fastq files.
