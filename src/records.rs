@@ -1,10 +1,53 @@
 use memchr::memchr;
 use std::io::{Error, ErrorKind, Result, Write};
 
-pub enum RecordTypes {
-    Fastq,
-    Fasta,
+#[derive(Debug)]
+pub enum RefRecord<'a> {
+    Fastq {
+        head: usize,
+        seq: usize,
+        sep: usize,
+        qual: usize,
+        data: &'a [u8],
+    },
+    Fasta {
+        head: usize,
+        seq: usize,
+        data: &'a [u8],
+    },
 }
+
+#[derive(Debug)]
+pub enum OwnedRecord {
+    Fastq {
+        head: Vec<u8>,
+        seq: Vec<u8>,
+        sep: Option<Vec<u8>>,
+        qual: Vec<u8>,
+    },
+    Fasta {
+        head: Vec<u8>,
+        seq: Vec<u8>,
+    },
+}
+
+#[derive(Debug)]
+pub enum IdxRecord {
+    Fastq {
+        head: usize,
+        seq: usize,
+        sep: usize,
+        qual: usize,
+        data: (usize, usize),
+    },
+    Fasta {
+        head: usize,
+        seq: usize,
+        data: (usize, usize),
+    },
+}
+
+// TODO: implementing everything on the enum types above
 
 /// Trait to be implemented by types that represent fastq records.
 pub trait Record {
@@ -13,6 +56,9 @@ pub trait Record {
 
     /// Return id line of the record as a byte slice
     fn head(&self) -> &[u8];
+
+    /// Return quality line of a record, if it exists, as a byte slice
+    fn qual(&self) -> Option<&[u8]>;
 
     /// Write the record to a writer
     fn write<W: Write>(&self, writer: &mut W) -> Result<usize>;
@@ -39,56 +85,56 @@ pub trait Record {
 }
 
 /// A fasta record that borrows data from an array.
-#[derive(Debug)]
-pub struct RefRecordFa<'a> {
-    // (start, stop), but might include \r at the end
-    head: usize,
-    seq: usize,
-    data: &'a [u8],
-}
+//#[derive(Debug)]
+//pub struct RefRecordFa<'a> {
+//// (start, stop), but might include \r at the end
+//head: usize,
+//seq: usize,
+//data: &'a [u8],
+//}
 
-/// A fasta record that ownes its data arrays.
-#[derive(Debug)]
-pub struct OwnedRecordFa {
-    pub head: Vec<u8>,
-    pub seq: Vec<u8>,
-}
+///// A fasta record that ownes its data arrays.
+//#[derive(Debug)]
+//pub struct OwnedRecordFa {
+//pub head: Vec<u8>,
+//pub seq: Vec<u8>,
+//}
 
-#[derive(Debug)]
-pub struct IdxRecordFa {
-    head: usize,
-    seq: usize,
-    pub data: (usize, usize),
-}
+//#[derive(Debug)]
+//pub struct IdxRecordFa {
+//head: usize,
+//seq: usize,
+//pub data: (usize, usize),
+//}
 
-/// A fastq record that borrows data from an array.
-#[derive(Debug)]
-pub struct RefRecordFq<'a> {
-    // (start, stop), but might include \r at the end
-    head: usize,
-    seq: usize,
-    sep: usize,
-    qual: usize,
-    data: &'a [u8],
-}
+///// A fastq record that borrows data from an array.
+//#[derive(Debug)]
+//pub struct RefRecordFq<'a> {
+//// (start, stop), but might include \r at the end
+//head: usize,
+//seq: usize,
+//sep: usize,
+//qual: usize,
+//data: &'a [u8],
+//}
 
-/// A fastq record that ownes its data arrays.
-#[derive(Debug)]
-pub struct OwnedRecordFq {
-    pub head: Vec<u8>,
-    pub seq: Vec<u8>,
-    pub sep: Option<Vec<u8>>,
-    pub qual: Vec<u8>,
-}
+///// A fastq record that ownes its data arrays.
+//#[derive(Debug)]
+//pub struct OwnedRecordFq {
+//pub head: Vec<u8>,
+//pub seq: Vec<u8>,
+//pub sep: Option<Vec<u8>>,
+//pub qual: Vec<u8>,
+//}
 
-#[derive(Debug)]
-pub struct IdxRecordFq {
-    head: usize,
-    seq: usize,
-    sep: usize,
-    qual: usize,
-    pub data: (usize, usize),
-}
+//#[derive(Debug)]
+//pub struct IdxRecordFq {
+//head: usize,
+//seq: usize,
+//sep: usize,
+//qual: usize,
+//pub data: (usize, usize),
+//}
 
 // TODO: Why is this even needed?
 /// Remove a final '\r' from a byte slice
@@ -101,49 +147,78 @@ fn trim_winline(line: &[u8]) -> &[u8] {
     }
 }
 
-impl<'a> RefRecordFq<'a> {
+impl<'a> Record for RefRecord<'a> {
     #[inline]
-    fn qual(&self) -> &[u8] {
-        trim_winline(&self.data[self.sep + 1..self.qual])
-    }
-}
-
-impl<'a> Record for RefRecordFq<'a> {
-    #[inline]
+    // skip the '@' at the beginning
     fn head(&self) -> &[u8] {
-        // skip the '@' at the beginning
-        trim_winline(&self.data[1..self.head])
+        match self {
+            Self::Fastq { head, data, .. } => trim_winline(&data[1..*head]),
+            Self::Fasta { head, data, .. } => trim_winline(&data[1..*head]),
+        }
+    }
+    #[inline]
+    fn qual(&self) -> Option<&[u8]> {
+        match self {
+            Self::Fastq {
+                sep, qual, data, ..
+            } => Some(trim_winline(&data[*sep + 1..*qual])),
+            Self::Fasta { .. } => None,
+        }
     }
 
     #[inline]
     fn seq(&self) -> &[u8] {
-        trim_winline(&self.data[self.head + 1..self.seq])
+        match self {
+            Self::Fastq {
+                head, seq, data, ..
+            } => trim_winline(&data[*head + 1..*seq]),
+            Self::Fasta {
+                head, seq, data, ..
+            } => trim_winline(&data[*head + 1..*seq]),
+        }
     }
 
     #[inline]
     fn write<W: Write>(&self, writer: &mut W) -> Result<usize> {
-        writer.write_all(&self.data)?;
-        Ok(self.data.len())
+        match self {
+            Self::Fastq { data, .. } => {
+                writer.write_all(&data)?;
+                Ok(data.len())
+            }
+            Self::Fasta { data, .. } => {
+                writer.write_all(&data)?;
+                Ok(data.len())
+            }
+        }
     }
 }
 
-impl OwnedRecordFq {
-    fn qual(&self) -> &[u8] {
-        &self.qual
-    }
-}
-
-impl Record for OwnedRecordFq {
+impl Record for OwnedRecord {
     fn head(&self) -> &[u8] {
-        // skip the '@' at the beginning
-        &self.head
+        match self {
+            Self::Fastq { head, .. } => head,
+            Self::Fasta { head, .. } => head,
+        }
     }
 
+    fn qual(&self) -> Option<&[u8]> {
+        match self {
+            Self::Fastq { qual, .. } => Some(qual),
+            Self::Fasta { .. } => None,
+        }
+    }
     fn seq(&self) -> &[u8] {
-        &self.seq
+        match self {
+            Self::Fastq { seq, .. } => seq,
+            Self::Fasta { seq, .. } => seq,
+        }
     }
 
     fn write<W: Write>(&self, writer: &mut W) -> Result<usize> {
+        match self {
+            Self::Fastq { head, seq, qual, sep }
+        }
+        // TODO stopped here, continue impling like this
         let mut written = 0;
         written += writer.write(b"@")?;
         written += writer.write(self.head())?;
@@ -158,25 +233,6 @@ impl Record for OwnedRecordFq {
         written += writer.write(self.qual())?;
         written += writer.write(b"\n")?;
         Ok(written)
-    }
-}
-
-impl<'a> Record for RefRecordFa<'a> {
-    #[inline]
-    fn head(&self) -> &[u8] {
-        // skip the '@' at the beginning
-        trim_winline(&self.data[1..self.head])
-    }
-
-    #[inline]
-    fn seq(&self) -> &[u8] {
-        trim_winline(&self.data[self.head + 1..self.seq])
-    }
-
-    #[inline]
-    fn write<W: Write>(&self, writer: &mut W) -> Result<usize> {
-        writer.write_all(&self.data)?;
-        Ok(self.data.len())
     }
 }
 
