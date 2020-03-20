@@ -128,7 +128,7 @@ use records::{IdxRecord, IdxRecordResult};
 
 
 #[cfg(fuzzing)]
-const BUFSIZE: usize = 64;
+const BUFSIZE: usize = 256;
 #[cfg(not(fuzzing))]
 const BUFSIZE: usize = 68 * 1024;
 
@@ -743,27 +743,6 @@ mod tests {
         assert!(parser.each(|_| true).is_err());
     }
 
-    #[test]
-    fn bufflen() {
-        let mut data: Cursor<Vec<u8>> = Cursor::new(vec![]);
-        data.write(b"@").unwrap();
-        for _ in 0..(super::BUFSIZE - 8) {
-            data.write(b"a").unwrap();
-        };
-        data.write(b"\nA\n+\nB\n").unwrap();
-        data.seek(SeekFrom::Start(0)).unwrap();
-        let parser = Parser::new(data);
-        let vals: Vec<u64> = parser.parallel_each(2, |sets| {
-            let mut count = 0;
-            for set in sets {
-                for _ in set.iter() {
-                    count += 1;
-                }
-            }
-            count
-        }).unwrap();
-        assert!(vals.iter().sum::<u64>() == 1);
-    }
 
     #[test]
     fn refset() {
