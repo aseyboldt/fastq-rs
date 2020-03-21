@@ -1,3 +1,7 @@
+# Version 0.7.0 (2020-03-21)
+
+- Add support for Fasta files
+
 # Version 0.6.0 (2018-08-10)
 
 - Make `RecordRefReader` public.
