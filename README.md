@@ -2,10 +2,10 @@
 
 # A fast parser for fastq.
 
-This library can process fastq files at about the speed of the
+This library can process fast{q,a} files at about the speed of the
 coreutils `wc -l` (about 2GB/s on my laptop, `seqan` runs at
 about 150MB/s). It also makes it easy to distribute the
-processing of fastq records to many cores, without losing much
+processing of fast{q,a} records to many cores, without losing much
 of the performance.
 
 See the [documentation](https://docs.rs/fastq/) for details and examples.
