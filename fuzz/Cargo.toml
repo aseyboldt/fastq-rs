@@ -30,8 +30,8 @@ path = "fuzz_targets/fuzz_target_2.rs"
 
 [[bin]]
 name = "fuzz_target_3"
-path = "fuzz_targets/fuzz_target_2.rs"
+path = "fuzz_targets/fuzz_target_3.rs"
 
 [[bin]]
 name = "fuzz_target_4"
-path = "fuzz_targets/fuzz_target_2.rs"
+path = "fuzz_targets/fuzz_target_4.rs"
