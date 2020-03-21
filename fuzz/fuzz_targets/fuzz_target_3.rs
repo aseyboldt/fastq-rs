@@ -10,7 +10,7 @@ extern crate fastq;
 
 fuzz_target!(|data: &[u8]| {
     let reader = Cursor::new(data);
-    let mut parser = fastq::Parser::new(reader, fastq::ParserKind::Fastq);
+    let mut parser = fastq::Parser::new(reader, fastq::ParserKind::Fasta);
 
     let mut sum: usize = 0;
     let _ = parser.each(|rec| {
