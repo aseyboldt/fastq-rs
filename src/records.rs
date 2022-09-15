@@ -1,6 +1,5 @@
-use std::io::{Write, Error, Result, ErrorKind};
 use memchr::memchr;
-
+use std::io::{Error, ErrorKind, Result, Write};
 
 /// Trait to be implemented by types that represent fastq records.
 pub trait Record {
@@ -18,7 +17,9 @@ pub trait Record {
     /// FIXME This might be much faster with a [bool; 256] array
     /// or using some simd instructions (eg with the jetscii crate).
     fn validate_dna(&self) -> bool {
-        self.seq().iter().all(|&x| x == b'A' || x == b'C' || x == b'T' || x == b'G')
+        self.seq()
+            .iter()
+            .all(|&x| x == b'A' || x == b'C' || x == b'T' || x == b'G')
     }
 
     /// Return true if the sequence contains only A, C, T, G and N.
@@ -26,10 +27,11 @@ pub trait Record {
     /// FIXME This might be much faster with a [bool; 256] array
     /// or using some simd instructions (eg with the jetscii crate).
     fn validate_dnan(&self) -> bool {
-        self.seq().iter().all(|&x| x == b'A' || x == b'C' || x == b'T' || x == b'G' || x == b'N')
+        self.seq()
+            .iter()
+            .all(|&x| x == b'A' || x == b'C' || x == b'T' || x == b'G' || x == b'N')
     }
 }
-
 
 /// A fastq record that borrows data from an array.
 #[derive(Debug)]
@@ -60,7 +62,6 @@ pub struct IdxRecord {
     pub data: (usize, usize),
 }
 
-
 /// Remove a final '\r' from a byte slice
 #[inline]
 fn trim_winline(line: &[u8]) -> &[u8] {
@@ -71,22 +72,21 @@ fn trim_winline(line: &[u8]) -> &[u8] {
     }
 }
 
-
 impl<'a> Record for RefRecord<'a> {
     #[inline]
     fn head(&self) -> &[u8] {
         // skip the '@' at the beginning
-        trim_winline(&self.data[1 .. self.head])
+        trim_winline(&self.data[1..self.head])
     }
 
     #[inline]
     fn seq(&self) -> &[u8] {
-        trim_winline(&self.data[self.head + 1 .. self.seq])
+        trim_winline(&self.data[self.head + 1..self.seq])
     }
 
     #[inline]
     fn qual(&self) -> &[u8] {
-        trim_winline(&self.data[self.sep + 1 .. self.qual])
+        trim_winline(&self.data[self.sep + 1..self.qual])
     }
 
     #[inline]
@@ -95,7 +95,6 @@ impl<'a> Record for RefRecord<'a> {
         Ok(self.data.len())
     }
 }
-
 
 impl Record for OwnedRecord {
     fn head(&self) -> &[u8] {
@@ -119,8 +118,8 @@ impl Record for OwnedRecord {
         written += writer.write(self.seq())?;
         written += writer.write(b"\n")?;
         match self.sep {
-            Some(ref s) => { written += writer.write(s)? }
-            None => { written += writer.write(b"+")? }
+            Some(ref s) => written += writer.write(s)?,
+            None => written += writer.write(b"+")?,
         }
         written += writer.write(b"\n")?;
         written += writer.write(self.qual())?;
@@ -129,41 +128,39 @@ impl Record for OwnedRecord {
     }
 }
 
-
 pub enum IdxRecordResult {
     Incomplete,
     EmptyBuffer,
     Record(IdxRecord),
 }
 
-
 #[inline]
 fn read_header(buffer: &[u8]) -> Result<Option<usize>> {
     match buffer.first() {
-        None => { Ok(None) },
-        Some(&b'@') => {
-            Ok(memchr(b'\n', buffer))
-        },
+        None => Ok(None),
+        Some(&b'@') => Ok(memchr(b'\n', buffer)),
         Some(_) => {
-            return Err(Error::new(ErrorKind::InvalidData,
-                                  "Fastq headers must start with '@'"))
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Fastq headers must start with '@'",
+            ))
         }
     }
 }
-
 
 #[inline]
 fn read_sep(buffer: &[u8]) -> Result<Option<usize>> {
     match buffer.first() {
-        None => { return Ok(None) },
-        Some(&b'+') => { Ok(memchr(b'\n', buffer)) },
+        None => return Ok(None),
+        Some(&b'+') => Ok(memchr(b'\n', buffer)),
         Some(_) => {
-            return Err(Error::new(ErrorKind::InvalidData,
-                                  "Sequence and quality not separated by +"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Sequence and quality not separated by +",
+            ));
         }
     }
 }
-
 
 impl<'a> RefRecord<'a> {
     /// Copy the borrowed data array and return an owned record.
@@ -172,7 +169,7 @@ impl<'a> RefRecord<'a> {
             seq: self.seq().to_vec(),
             qual: self.qual().to_vec(),
             head: self.head().to_vec(),
-            sep: Some(trim_winline(&self.data[self.seq + 1..self.sep]).to_vec())
+            sep: Some(trim_winline(&self.data[self.seq + 1..self.sep]).to_vec()),
         }
     }
 }
@@ -207,46 +204,45 @@ impl IdxRecord {
             return Ok(IdxRecordResult::EmptyBuffer);
         }
 
-
         let head_end = match read_header(buffer)? {
-            None => { return Ok(IdxRecordResult::Incomplete) },
-            Some(val) => val
+            None => return Ok(IdxRecordResult::Incomplete),
+            Some(val) => val,
         };
         let pos = head_end + 1;
 
         let buffer_ = &buffer[pos..];
         let seq_end = match memchr(b'\n', buffer_) {
-            None => { return Ok(IdxRecordResult::Incomplete) },
-            Some(end) => end + pos
+            None => return Ok(IdxRecordResult::Incomplete),
+            Some(end) => end + pos,
         };
         let pos = seq_end + 1;
 
         let buffer_ = &buffer[pos..];
         let sep_end = match read_sep(buffer_)? {
-            None => { return Ok(IdxRecordResult::Incomplete) },
+            None => return Ok(IdxRecordResult::Incomplete),
             Some(end) => end + pos,
         };
         let pos = sep_end + 1;
 
         let buffer_ = &buffer[pos..];
         let qual_end = match memchr(b'\n', buffer_) {
-            None => { return Ok(IdxRecordResult::Incomplete) },
+            None => return Ok(IdxRecordResult::Incomplete),
             Some(end) => end + pos,
         };
 
         if qual_end - sep_end != seq_end - head_end {
-            return Err(Error::new(ErrorKind::InvalidData,
-                                  "Sequence and quality length mismatch"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Sequence and quality length mismatch",
+            ));
         }
 
-        Ok(IdxRecordResult::Record(
-            IdxRecord {
-                data: (0, qual_end + 1),
-                head: head_end,
-                seq: seq_end,
-                sep: sep_end,
-                qual: qual_end,
-            }
-        ))
+        Ok(IdxRecordResult::Record(IdxRecord {
+            data: (0, qual_end + 1),
+            head: head_end,
+            seq: seq_end,
+            sep: sep_end,
+            qual: qual_end,
+        }))
     }
 }

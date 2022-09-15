@@ -1,8 +1,7 @@
-use fastq::{parse_path, each_zipped};
+use fastq::{each_zipped, parse_path};
 use std::env::args;
 
 extern crate fastq;
-
 
 fn main() {
     let path1 = args().nth(1).expect("Need two input files.");
@@ -20,9 +19,12 @@ fn main() {
                     counts.1 += 1;
                 }
                 (true, true)
-            }).expect("Invalid record.");
-        }).expect("Unknown format for file 2.");
-    }).expect("Unknown format for file 1.");
+            })
+            .expect("Invalid record.");
+        })
+        .expect("Unknown format for file 2.");
+    })
+    .expect("Unknown format for file 1.");
 
     println!("Number of reads: ({}, {})", counts.0, counts.1);
 }
