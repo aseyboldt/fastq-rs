@@ -11,8 +11,7 @@ keywords = ["bio", "fastq", "parser"]
 
 [dependencies]
 memchr = ">=0.1"
-lz4 = "^1.20"
-flate2 = { version = ">=0.2.18", features = ["zlib"], default-features = false }
+niffler = { version = ">=2.4.0" }
 
 [dev-dependencies]
 parasailors = ">=0.3"
